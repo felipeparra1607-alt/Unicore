@@ -1,8 +1,8 @@
 from mcp.server import MCPServer
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.database.connection import SessionLocal
-from src.database.models import Subject
+from src.database.models import Professor, Subject
 
 
 mcp = MCPServer("UniCore")
@@ -18,10 +18,26 @@ def subject_to_dict(subject: Subject) -> dict:
     }
 
 
+def professor_to_dict(professor: Professor) -> dict:
+    """Convierte un profesor de la base de datos en un diccionario."""
+    return {
+        "id": professor.id,
+        "name": professor.name,
+        "subject_id": professor.subject_id,
+        "public_profile_url": professor.public_profile_url,
+        "notes": professor.notes,
+    }
+
+
 @mcp.tool()
 def health_check() -> str:
     """Comprueba que el servidor UniCore está funcionando."""
     return "UniCore MCP funcionando correctamente"
+
+
+# ------------------------------------------------------------------
+# ASIGNATURAS
+# ------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -42,7 +58,9 @@ def create_subject(
 
     with SessionLocal() as session:
         existing_subject = session.scalar(
-            select(Subject).where(Subject.name == clean_name)
+            select(Subject).where(
+                func.lower(Subject.name) == clean_name.lower()
+            )
         )
 
         if existing_subject:
@@ -123,12 +141,12 @@ def update_subject(
             if not clean_name:
                 return {
                     "ok": False,
-                    "error": "El nombre de la asignatura no puede estar vacío",
+                    "error": "El nombre no puede estar vacío",
                 }
 
             duplicate = session.scalar(
                 select(Subject).where(
-                    Subject.name == clean_name,
+                    func.lower(Subject.name) == clean_name.lower(),
                     Subject.id != subject_id,
                 )
             )
@@ -181,4 +199,129 @@ def delete_subject(subject_id: int) -> dict:
                 "id": subject_id,
                 "name": subject_name,
             },
+        }
+
+
+# ------------------------------------------------------------------
+# PROFESORES
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def create_professor(
+    name: str,
+    subject_id: int,
+    public_profile_url: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Crea un profesor y lo vincula con una asignatura."""
+
+    clean_name = name.strip()
+
+    if not clean_name:
+        return {
+            "ok": False,
+            "error": "El nombre del profesor no puede estar vacío",
+        }
+
+    with SessionLocal() as session:
+        subject = session.get(Subject, subject_id)
+
+        if subject is None:
+            return {
+                "ok": False,
+                "error": "La asignatura indicada no existe",
+            }
+
+        existing_professor = session.scalar(
+            select(Professor).where(
+                func.lower(Professor.name) == clean_name.lower(),
+                Professor.subject_id == subject_id,
+            )
+        )
+
+        if existing_professor:
+            return {
+                "ok": False,
+                "error": "Este profesor ya está vinculado a la asignatura",
+                "professor_id": existing_professor.id,
+            }
+
+        professor = Professor(
+            name=clean_name,
+            subject_id=subject_id,
+            public_profile_url=public_profile_url,
+            notes=notes,
+        )
+
+        session.add(professor)
+        session.commit()
+        session.refresh(professor)
+
+        return {
+            "ok": True,
+            "professor": professor_to_dict(professor),
+            "subject": subject_to_dict(subject),
+        }
+
+
+@mcp.tool()
+def list_professors(subject_id: int | None = None) -> list[dict]:
+    """Lista profesores, opcionalmente filtrados por asignatura."""
+
+    with SessionLocal() as session:
+        query = select(Professor).order_by(Professor.name)
+
+        if subject_id is not None:
+            query = query.where(Professor.subject_id == subject_id)
+
+        professors = session.scalars(query).all()
+
+        return [professor_to_dict(professor) for professor in professors]
+
+
+@mcp.tool()
+def get_professor(professor_id: int) -> dict:
+    """Devuelve un profesor concreto y su asignatura."""
+
+    with SessionLocal() as session:
+        professor = session.get(Professor, professor_id)
+
+        if professor is None:
+            return {
+                "ok": False,
+                "error": "Profesor no encontrado",
+            }
+
+        subject = session.get(Subject, professor.subject_id)
+
+        return {
+            "ok": True,
+            "professor": professor_to_dict(professor),
+            "subject": subject_to_dict(subject),
+        }
+
+
+@mcp.tool()
+def delete_professor(professor_id: int) -> dict:
+    """Elimina un profesor por su ID."""
+
+    with SessionLocal() as session:
+        professor = session.get(Professor, professor_id)
+
+        if professor is None:
+            return {
+                "ok": False,
+                "error": "Profesor no encontrado",
+            }
+
+        professor_data = professor_to_dict(professor)
+
+        session.delete(professor)
+        session.commit()
+
+        return {
+            "ok": True,
+            "message": "Profesor eliminado correctamente",
+            "professor": professor_data,
         }
