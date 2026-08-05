@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: unicore
-Version: 0.1.0
-Summary: Servidor MCP académico personal
-Requires-Python: >=3.12
-Requires-Dist: mcp==2.0.0
-Requires-Dist: SQLAlchemy==2.0.51
