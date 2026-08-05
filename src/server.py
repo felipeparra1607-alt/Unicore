@@ -1,15 +1,18 @@
+import hashlib
+from pathlib import Path
+
 from mcp.server import MCPServer
 from sqlalchemy import func, select
 
 from src.database.connection import SessionLocal
-from src.database.models import Professor, Subject
+from src.database.models import Document, Professor, Subject
 
 
 mcp = MCPServer("UniCore")
 
 
 def subject_to_dict(subject: Subject) -> dict:
-    """Convierte una asignatura de la base de datos en un diccionario."""
+    """Convierte una asignatura en un diccionario."""
     return {
         "id": subject.id,
         "name": subject.name,
@@ -19,7 +22,7 @@ def subject_to_dict(subject: Subject) -> dict:
 
 
 def professor_to_dict(professor: Professor) -> dict:
-    """Convierte un profesor de la base de datos en un diccionario."""
+    """Convierte un profesor en un diccionario."""
     return {
         "id": professor.id,
         "name": professor.name,
@@ -27,6 +30,31 @@ def professor_to_dict(professor: Professor) -> dict:
         "public_profile_url": professor.public_profile_url,
         "notes": professor.notes,
     }
+
+
+def document_to_dict(document: Document) -> dict:
+    """Convierte un documento en un diccionario."""
+    return {
+        "id": document.id,
+        "title": document.title,
+        "file_path": document.file_path,
+        "file_type": document.file_type,
+        "document_type": document.document_type,
+        "subject_id": document.subject_id,
+        "content_hash": document.content_hash,
+        "has_extracted_text": bool(document.extracted_text),
+    }
+
+
+def calculate_file_hash(file_path: Path) -> str:
+    """Calcula una huella SHA-256 para detectar archivos duplicados."""
+    sha256 = hashlib.sha256()
+
+    with file_path.open("rb") as file:
+        while chunk := file.read(1024 * 1024):
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
 
 
 @mcp.tool()
@@ -46,7 +74,7 @@ def create_subject(
     academic_year: str | None = None,
     description: str | None = None,
 ) -> dict:
-    """Crea una nueva asignatura en UniCore."""
+    """Crea una nueva asignatura."""
 
     clean_name = name.strip()
 
@@ -88,7 +116,7 @@ def create_subject(
 
 @mcp.tool()
 def list_subjects() -> list[dict]:
-    """Devuelve todas las asignaturas guardadas en UniCore."""
+    """Devuelve todas las asignaturas."""
 
     with SessionLocal() as session:
         subjects = session.scalars(
@@ -100,7 +128,7 @@ def list_subjects() -> list[dict]:
 
 @mcp.tool()
 def get_subject(subject_id: int) -> dict:
-    """Devuelve una asignatura concreta por su ID."""
+    """Devuelve una asignatura por su ID."""
 
     with SessionLocal() as session:
         subject = session.get(Subject, subject_id)
@@ -124,7 +152,7 @@ def update_subject(
     academic_year: str | None = None,
     description: str | None = None,
 ) -> dict:
-    """Actualiza los datos de una asignatura existente."""
+    """Actualiza una asignatura."""
 
     with SessionLocal() as session:
         subject = session.get(Subject, subject_id)
@@ -267,7 +295,7 @@ def create_professor(
 
 @mcp.tool()
 def list_professors(subject_id: int | None = None) -> list[dict]:
-    """Lista profesores, opcionalmente filtrados por asignatura."""
+    """Lista profesores, opcionalmente por asignatura."""
 
     with SessionLocal() as session:
         query = select(Professor).order_by(Professor.name)
@@ -282,7 +310,7 @@ def list_professors(subject_id: int | None = None) -> list[dict]:
 
 @mcp.tool()
 def get_professor(professor_id: int) -> dict:
-    """Devuelve un profesor concreto y su asignatura."""
+    """Devuelve un profesor y su asignatura."""
 
     with SessionLocal() as session:
         professor = session.get(Professor, professor_id)
@@ -324,4 +352,149 @@ def delete_professor(professor_id: int) -> dict:
             "ok": True,
             "message": "Profesor eliminado correctamente",
             "professor": professor_data,
+        }
+
+
+# ------------------------------------------------------------------
+# DOCUMENTOS
+# ------------------------------------------------------------------
+
+
+@mcp.tool()
+def register_document(
+    file_path: str,
+    subject_id: int | None = None,
+    title: str | None = None,
+    document_type: str | None = None,
+) -> dict:
+    """Registra un archivo universitario sin copiarlo ni borrarlo."""
+
+    path = Path(file_path).expanduser().resolve()
+
+    if not path.exists():
+        return {
+            "ok": False,
+            "error": "El archivo indicado no existe",
+            "file_path": str(path),
+        }
+
+    if not path.is_file():
+        return {
+            "ok": False,
+            "error": "La ruta indicada no corresponde a un archivo",
+            "file_path": str(path),
+        }
+
+    content_hash = calculate_file_hash(path)
+
+    with SessionLocal() as session:
+        if subject_id is not None:
+            subject = session.get(Subject, subject_id)
+
+            if subject is None:
+                return {
+                    "ok": False,
+                    "error": "La asignatura indicada no existe",
+                }
+
+        duplicate = session.scalar(
+            select(Document).where(Document.content_hash == content_hash)
+        )
+
+        if duplicate:
+            return {
+                "ok": False,
+                "error": "Este archivo ya está registrado",
+                "document": document_to_dict(duplicate),
+            }
+
+        document = Document(
+            title=title.strip() if title and title.strip() else path.stem,
+            file_path=str(path),
+            file_type=path.suffix.lower().lstrip(".") or None,
+            document_type=document_type,
+            subject_id=subject_id,
+            content_hash=content_hash,
+        )
+
+        session.add(document)
+        session.commit()
+        session.refresh(document)
+
+        return {
+            "ok": True,
+            "document": document_to_dict(document),
+        }
+
+
+@mcp.tool()
+def list_documents(subject_id: int | None = None) -> list[dict]:
+    """Lista documentos, opcionalmente filtrados por asignatura."""
+
+    with SessionLocal() as session:
+        query = select(Document).order_by(Document.title)
+
+        if subject_id is not None:
+            query = query.where(Document.subject_id == subject_id)
+
+        documents = session.scalars(query).all()
+
+        return [document_to_dict(document) for document in documents]
+
+
+@mcp.tool()
+def get_document(document_id: int) -> dict:
+    """Devuelve un documento concreto."""
+
+    with SessionLocal() as session:
+        document = session.get(Document, document_id)
+
+        if document is None:
+            return {
+                "ok": False,
+                "error": "Documento no encontrado",
+            }
+
+        subject = None
+
+        if document.subject_id is not None:
+            subject_record = session.get(Subject, document.subject_id)
+
+            if subject_record is not None:
+                subject = subject_to_dict(subject_record)
+
+        return {
+            "ok": True,
+            "document": document_to_dict(document),
+            "subject": subject,
+        }
+
+
+@mcp.tool()
+def delete_document(document_id: int) -> dict:
+    """
+    Elimina el registro de un documento.
+
+    No elimina el archivo original del ordenador.
+    """
+
+    with SessionLocal() as session:
+        document = session.get(Document, document_id)
+
+        if document is None:
+            return {
+                "ok": False,
+                "error": "Documento no encontrado",
+            }
+
+        document_data = document_to_dict(document)
+
+        session.delete(document)
+        session.commit()
+
+        return {
+            "ok": True,
+            "message": "Registro del documento eliminado correctamente",
+            "original_file_deleted": False,
+            "document": document_data,
         }
