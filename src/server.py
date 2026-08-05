@@ -4,6 +4,7 @@ from pathlib import Path
 from mcp.server import MCPServer
 from sqlalchemy import func, select
 
+from src.chunk_tools import register_chunk_tools
 from src.database.connection import SessionLocal
 from src.database.models import Document, Professor, Subject
 from src.document_extractors import (
@@ -13,6 +14,7 @@ from src.document_extractors import (
 
 
 mcp = MCPServer("UniCore")
+register_chunk_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
