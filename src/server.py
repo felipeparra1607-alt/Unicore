@@ -5,6 +5,7 @@ from mcp.server import MCPServer
 from sqlalchemy import func, select
 
 from src.chunk_tools import register_chunk_tools
+from src.model_answer_tools import register_model_answer_tools
 from src.database.connection import SessionLocal
 from src.database.models import Document, Professor, Subject
 from src.rag_answer_tools import register_rag_answer_tools
@@ -19,6 +20,7 @@ mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
 register_rag_tools(mcp)
 register_rag_answer_tools(mcp)
+register_model_answer_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
