@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from src.chunk_tools import register_chunk_tools
 from src.database.connection import SessionLocal
 from src.database.models import Document, Professor, Subject
+from src.rag_tools import register_rag_tools
 from src.document_extractors import (
     SUPPORTED_EXTENSIONS,
     extract_document_text as extract_text_from_file,
@@ -15,6 +16,7 @@ from src.document_extractors import (
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
+register_rag_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
