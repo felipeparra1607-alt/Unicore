@@ -402,4 +402,103 @@ class StudyAnswer(Base):
         default=datetime.utcnow,
         nullable=False,
     )   
-    
+class ReviewItem(Base):
+    __tablename__ = "review_items"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    source_attempt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("study_attempts.id"),
+    )
+
+    source_answer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("study_answers.id"),
+    )
+
+    topic: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    question: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    correct_answer: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    explanation: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    sources_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="learning",
+        nullable=False,
+    )
+
+    priority: Mapped[int] = mapped_column(
+        default=3,
+        nullable=False,
+    )
+
+    repetition_count: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    correct_streak: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    incorrect_count: Mapped[int] = mapped_column(
+        default=1,
+        nullable=False,
+    )
+
+    interval_days: Mapped[int] = mapped_column(
+        default=1,
+        nullable=False,
+    )
+
+    ease_factor: Mapped[float] = mapped_column(
+        default=2.5,
+        nullable=False,
+    )
+
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    next_review_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
