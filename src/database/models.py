@@ -502,3 +502,71 @@ class ReviewItem(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class StudySession(Base):
+    __tablename__ = "study_sessions"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    session_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    duration_minutes: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    activity_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    topic: Mapped[str | None] = mapped_column(
+        String(250),
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    planned_minutes: Mapped[int | None] = mapped_column()
+
+    completed_plan: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    focus_rating: Mapped[int | None] = mapped_column()
+
+    difficulty_rating: Mapped[int | None] = mapped_column()
+
+    satisfaction_rating: Mapped[int | None] = mapped_column()
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

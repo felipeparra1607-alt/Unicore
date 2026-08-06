@@ -25,7 +25,9 @@ from src.document_extractors import (
     SUPPORTED_EXTENSIONS,
     extract_document_text as extract_text_from_file,
 )
-
+from src.study_session_tools import (
+    register_study_session_tools,
+)
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
@@ -37,6 +39,7 @@ register_study_tools(mcp)
 register_study_progress_tools(mcp)
 register_review_tools(mcp)
 register_dashboard_tools(mcp)
+register_study_session_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
