@@ -11,6 +11,9 @@ from src.database.models import Document, Professor, Subject
 from src.rag_answer_tools import register_rag_answer_tools
 from src.rag_tools import register_rag_tools
 from src.study_tools import register_study_tools
+from src.study_progress_tools import (
+    register_study_progress_tools,
+)
 from src.class_session_tools import (
     register_class_session_tools,
 )
@@ -27,6 +30,7 @@ register_rag_answer_tools(mcp)
 register_model_answer_tools(mcp)
 register_class_session_tools(mcp)
 register_study_tools(mcp)
+register_study_progress_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:

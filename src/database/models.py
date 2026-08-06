@@ -7,6 +7,8 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
+    Float,
+    Integer,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -264,7 +266,7 @@ class ClassSession(Base):
     subject: Mapped["Subject"] = relationship(
         back_populates="classes",
     )
-    
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -288,3 +290,116 @@ class Project(Base):
     subject: Mapped["Subject | None"] = relationship(
         back_populates="projects",
     )
+class StudyAttempt(Base):
+    __tablename__ = "study_attempts"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    topic: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    study_mode: Mapped[str] = mapped_column(
+        String(50),
+        default="quiz",
+        nullable=False,
+    )
+
+    difficulty: Mapped[str | None] = mapped_column(
+        String(50),
+    )
+
+    questions_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    answers_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    results_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    total_questions: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    correct_answers: Mapped[int | None] = mapped_column()
+
+    score_percentage: Mapped[float | None] = mapped_column()
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="pending",
+        nullable=False,
+    )
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+
+class StudyAnswer(Base):
+    __tablename__ = "study_answers"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("study_attempts.id"),
+        nullable=False,
+    )
+
+    question_index: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    question: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    selected_index: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    correct_index: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    is_correct: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+
+    explanation: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    sources_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )   
+    
