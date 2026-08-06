@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -175,29 +176,95 @@ class DocumentChunk(Base):
 class ClassSession(Base):
     __tablename__ = "class_sessions"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
     title: Mapped[str] = mapped_column(
         String(250),
         nullable=False,
     )
-    class_date: Mapped[date | None] = mapped_column(Date)
+
+    class_date: Mapped[date | None] = mapped_column(
+        Date,
+    )
+
+    start_time: Mapped[str | None] = mapped_column(
+        String(5),
+    )
+
+    end_time: Mapped[str | None] = mapped_column(
+        String(5),
+    )
+
+    session_type: Mapped[str | None] = mapped_column(
+        String(50),
+    )
+
+    location: Mapped[str | None] = mapped_column(
+        String(250),
+    )
+
+    attended: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
     subject_id: Mapped[int] = mapped_column(
         ForeignKey("subjects.id"),
         nullable=False,
     )
-    transcript: Mapped[str | None] = mapped_column(Text)
-    summary: Mapped[str | None] = mapped_column(Text)
+
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professors.id"),
+    )
+
+    source_document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id"),
+    )
+
+    topics: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    transcript: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    summary: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    doubts: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    tasks: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
         nullable=False,
     )
 
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
     subject: Mapped["Subject"] = relationship(
         back_populates="classes",
     )
-
-
+    
 class Project(Base):
     __tablename__ = "projects"
 

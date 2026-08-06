@@ -10,6 +10,9 @@ from src.database.connection import SessionLocal
 from src.database.models import Document, Professor, Subject
 from src.rag_answer_tools import register_rag_answer_tools
 from src.rag_tools import register_rag_tools
+from src.class_session_tools import (
+    register_class_session_tools,
+)
 from src.document_extractors import (
     SUPPORTED_EXTENSIONS,
     extract_document_text as extract_text_from_file,
@@ -21,6 +24,7 @@ register_chunk_tools(mcp)
 register_rag_tools(mcp)
 register_rag_answer_tools(mcp)
 register_model_answer_tools(mcp)
+register_class_session_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
