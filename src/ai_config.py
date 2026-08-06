@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 
-# Carga las variables privadas guardadas en el archivo .env.
 load_dotenv()
 
 
@@ -35,7 +34,7 @@ def read_integer_environment(
     minimum: int,
     maximum: int,
 ) -> int:
-    """Lee una variable entera y limita su rango."""
+    """Lee y valida una variable entera."""
 
     raw_value = os.getenv(variable_name)
 
@@ -50,9 +49,30 @@ def read_integer_environment(
     return max(minimum, min(maximum, value))
 
 
+def read_float_environment(
+    variable_name: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    """Lee y valida una variable decimal."""
+
+    raw_value = os.getenv(variable_name)
+
+    if raw_value is None:
+        return default
+
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return default
+
+    return max(minimum, min(maximum, value))
+
+
 @dataclass(frozen=True)
 class AISettings:
-    """Configuración común de los proveedores generativos."""
+    """Configuración común de proveedores generativos."""
 
     provider: str
     openai_api_key: str | None
@@ -61,9 +81,12 @@ class AISettings:
     maximum_output_tokens: int
     fallback_to_extractive: bool
 
+    openai_input_price_per_million: float
+    openai_output_price_per_million: float
+
 
 def get_ai_settings() -> AISettings:
-    """Obtiene la configuración actual desde el archivo .env."""
+    """Obtiene la configuración desde variables de entorno."""
 
     api_key = os.getenv(
         "OPENAI_API_KEY",
@@ -78,7 +101,7 @@ def get_ai_settings() -> AISettings:
         openai_api_key=api_key or None,
         openai_model=os.getenv(
             "OPENAI_MODEL",
-            "gpt-5-mini",
+            "gpt-5.6-luna",
         ).strip(),
         openai_timeout_seconds=read_integer_environment(
             variable_name="OPENAI_TIMEOUT_SECONDS",
@@ -88,12 +111,32 @@ def get_ai_settings() -> AISettings:
         ),
         maximum_output_tokens=read_integer_environment(
             variable_name="UNICORE_MAX_OUTPUT_TOKENS",
-            default=1200,
+            default=600,
             minimum=100,
             maximum=10000,
         ),
         fallback_to_extractive=read_boolean_environment(
             variable_name="UNICORE_FALLBACK_TO_EXTRACTIVE",
             default=True,
+        ),
+        openai_input_price_per_million=(
+            read_float_environment(
+                variable_name=(
+                    "OPENAI_INPUT_PRICE_PER_MILLION"
+                ),
+                default=1.0,
+                minimum=0.0,
+                maximum=1000.0,
+            )
+        ),
+        openai_output_price_per_million=(
+            read_float_environment(
+                variable_name=(
+                    "OPENAI_OUTPUT_PRICE_PER_MILLION"
+                ),
+                default=6.0,
+                minimum=0.0,
+                maximum=1000.0,
+            )
         ),
     )

@@ -14,7 +14,7 @@ class GenerationRequest:
 
 @dataclass
 class GenerationResult:
-    """Resultado común devuelto por cualquier proveedor."""
+    """Resultado normalizado de cualquier proveedor."""
 
     ok: bool
     provider: str
@@ -24,6 +24,15 @@ class GenerationResult:
     output_tokens: int | None = None
     total_tokens: int | None = None
     response_id: str | None = None
+
+    response_status: str | None = None
+    incomplete_reason: str | None = None
+    truncated: bool = False
+
+    estimated_input_cost_usd: float | None = None
+    estimated_output_cost_usd: float | None = None
+    estimated_total_cost_usd: float | None = None
+
     error: str | None = None
     technical_detail: str | None = None
     metadata: dict[str, Any] = field(
@@ -32,7 +41,7 @@ class GenerationResult:
 
 
 class AIProvider(ABC):
-    """Contrato que deben respetar todos los proveedores."""
+    """Contrato común de los proveedores de IA."""
 
     provider_name: str
 
@@ -41,4 +50,4 @@ class AIProvider(ABC):
         self,
         request: GenerationRequest,
     ) -> GenerationResult:
-        """Genera una respuesta a partir de una petición."""
+        """Genera texto a partir de una petición."""

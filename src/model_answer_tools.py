@@ -391,17 +391,37 @@ def register_model_answer_tools(mcp) -> None:
             ),
             "response_id": generation_result.response_id,
             "usage": {
-                "input_tokens": (
-                    generation_result.input_tokens
-                ),
-                "output_tokens": (
-                    generation_result.output_tokens
-                ),
-                "total_tokens": (
-                    generation_result.total_tokens
-                ),
-            },
-            "duration_ms": elapsed_ms,
+    "input_tokens": (
+        generation_result.input_tokens
+    ),
+    "output_tokens": (
+        generation_result.output_tokens
+    ),
+    "total_tokens": (
+        generation_result.total_tokens
+    ),
+},
+"generation_status": {
+    "response_status": (
+        generation_result.response_status
+    ),
+    "incomplete_reason": (
+        generation_result.incomplete_reason
+    ),
+    "truncated": generation_result.truncated,
+},
+"estimated_cost_usd": {
+    "input": (
+        generation_result.estimated_input_cost_usd
+    ),
+    "output": (
+        generation_result.estimated_output_cost_usd
+    ),
+    "total": (
+        generation_result.estimated_total_cost_usd
+    ),
+},
+"duration_ms": elapsed_ms,
             "fallback_used": fallback_used,
             "provider_error": (
                 generation_result.error

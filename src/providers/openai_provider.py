@@ -13,8 +13,23 @@ from src.providers.base import (
 )
 
 
+def calculate_cost(
+    token_count: int | None,
+    price_per_million: float,
+) -> float | None:
+    """Calcula el coste aproximado en dólares."""
+
+    if token_count is None:
+        return None
+
+    return round(
+        token_count * price_per_million / 1_000_000,
+        8,
+    )
+
+
 class OpenAIProvider(AIProvider):
-    """Proveedor generativo mediante la API de OpenAI."""
+    """Proveedor mediante OpenAI Responses API."""
 
     provider_name = "openai"
 
@@ -38,7 +53,7 @@ class OpenAIProvider(AIProvider):
         self,
         request: GenerationRequest,
     ) -> GenerationResult:
-        """Genera una respuesta con OpenAI."""
+        """Genera una respuesta mediante OpenAI."""
 
         try:
             response = self.client.responses.create(
@@ -77,6 +92,51 @@ class OpenAIProvider(AIProvider):
                 else None
             )
 
+            response_status = getattr(
+                response,
+                "status",
+                None,
+            )
+
+            incomplete_details = getattr(
+                response,
+                "incomplete_details",
+                None,
+            )
+
+            incomplete_reason = (
+                getattr(
+                    incomplete_details,
+                    "reason",
+                    None,
+                )
+                if incomplete_details is not None
+                else None
+            )
+
+            truncated = (
+                response_status == "incomplete"
+                and incomplete_reason
+                == "max_output_tokens"
+            )
+
+            input_cost = calculate_cost(
+                input_tokens,
+                self.settings.openai_input_price_per_million,
+            )
+
+            output_cost = calculate_cost(
+                output_tokens,
+                self.settings.openai_output_price_per_million,
+            )
+
+            total_cost = (
+                round(input_cost + output_cost, 8)
+                if input_cost is not None
+                and output_cost is not None
+                else None
+            )
+
             if not output_text:
                 return GenerationResult(
                     ok=False,
@@ -90,6 +150,12 @@ class OpenAIProvider(AIProvider):
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=total_tokens,
+                    response_status=response_status,
+                    incomplete_reason=incomplete_reason,
+                    truncated=truncated,
+                    estimated_input_cost_usd=input_cost,
+                    estimated_output_cost_usd=output_cost,
+                    estimated_total_cost_usd=total_cost,
                     error="OpenAI no devolvió texto",
                 )
 
@@ -106,6 +172,12 @@ class OpenAIProvider(AIProvider):
                     "id",
                     None,
                 ),
+                response_status=response_status,
+                incomplete_reason=incomplete_reason,
+                truncated=truncated,
+                estimated_input_cost_usd=input_cost,
+                estimated_output_cost_usd=output_cost,
+                estimated_total_cost_usd=total_cost,
                 metadata={
                     "api_called": True,
                     "stored_by_provider": False,
