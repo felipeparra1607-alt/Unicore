@@ -570,3 +570,76 @@ class StudySession(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class AcademicTask(Base):
+    __tablename__ = "academic_tasks"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"),
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    task_type: Mapped[str] = mapped_column(
+        String(50),
+        default="other",
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="pending",
+        nullable=False,
+    )
+
+    priority: Mapped[int] = mapped_column(
+        default=3,
+        nullable=False,
+    )
+
+    due_date: Mapped[date | None] = mapped_column(
+        Date,
+    )
+
+    estimated_minutes: Mapped[int | None] = mapped_column()
+
+    spent_minutes: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    progress_percentage: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
