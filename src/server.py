@@ -12,6 +12,9 @@ from src.rag_answer_tools import register_rag_answer_tools
 from src.rag_tools import register_rag_tools
 from src.review_tools import register_review_tools
 from src.study_tools import register_study_tools
+from src.dashboard_tools import (
+    register_dashboard_tools,
+)
 from src.study_progress_tools import (
     register_study_progress_tools,
 )
@@ -33,6 +36,7 @@ register_class_session_tools(mcp)
 register_study_tools(mcp)
 register_study_progress_tools(mcp)
 register_review_tools(mcp)
+register_dashboard_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
