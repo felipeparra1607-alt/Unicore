@@ -1,9 +1,14 @@
 import json
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 
+from src.academic_risk_tools import (
+    build_subject_risk,
+)
+from src.analytics_tools import (
+    build_learning_analytics,
+)
 from src.database.connection import SessionLocal
 from src.database.models import (
     AcademicTask,
@@ -719,6 +724,29 @@ def build_dashboard_data(
             == "completed"
         )
 
+        # Analítica avanzada:
+        # compara las últimas dos ventanas de 14 días.
+        analytics = (
+            build_learning_analytics(
+                subject_id=subject_id,
+                comparison_days=14,
+            )
+        )
+
+        # El riesgo solo tiene sentido en la vista
+        # de una asignatura concreta.
+        risk = None
+
+        if subject_id is not None:
+            risk_result = (
+                build_subject_risk(
+                    subject_id
+                )
+            )
+
+            if risk_result.get("ok"):
+                risk = risk_result
+
         return {
             "ok": True,
             "generated_at": (
@@ -903,6 +931,15 @@ def build_dashboard_data(
                 for item in achievements[:5]
             ],
             "subjects": subject_cards,
+
+            # Nuevas métricas avanzadas.
+            "analytics": (
+                analytics
+                if analytics.get("ok")
+                else None
+            ),
+            "academic_risk": risk,
+
             "provider_called": False,
             "estimated_cost_usd": 0,
         }

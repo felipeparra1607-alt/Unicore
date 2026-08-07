@@ -61,6 +61,12 @@ from src.boss_battle_tools import (
 from src.unicore_dashboard import (
     register_unicore_dashboard_tools,
 )
+from src.analytics_tools import (
+    register_analytics_tools,
+)
+from src.academic_risk_tools import (
+    register_academic_risk_tools,
+)
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
@@ -84,6 +90,8 @@ register_gamification_tools(mcp)
 register_mission_tools(mcp)
 register_boss_battle_tools(mcp)
 register_unicore_dashboard_tools(mcp)
+register_analytics_tools(mcp)
+register_academic_risk_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
