@@ -6,6 +6,7 @@ from src.database.connection import SessionLocal
 from src.database.models import (
     AcademicTask,
     DailyMission,
+    GamificationEvent,
     ReviewItem,
     StudySession,
     Subject,
@@ -287,8 +288,10 @@ def register_mission_tools(mcp) -> None:
         subject_id: int | None = None,
     ) -> dict:
         """
-        Actualiza automáticamente el progreso
-        de las misiones de hoy.
+        Actualiza automáticamente las misiones de hoy
+        y concede su XP cuando se completan.
+
+        El XP solo puede concederse una vez por misión.
         """
 
         today = date.today()
@@ -313,164 +316,207 @@ def register_mission_tools(mcp) -> None:
             ).all()
 
             updated = 0
-            completed = 0
+            newly_completed = 0
+            rewarded_missions = 0
+            xp_awarded = 0
 
             for mission in missions:
-                if mission.status == "completed":
-                    continue
-
-                previous_value = (
-                    mission.current_value
+                was_completed_before = (
+                    mission.status
+                    == "completed"
                 )
 
-                if (
-                    mission.mission_type
-                    == "study_minutes"
-                ):
-                    study_statement = select(
-                        StudySession
-                    ).where(
-                        StudySession.session_date
-                        == today
+                if not was_completed_before:
+                    previous_value = (
+                        mission.current_value
                     )
 
-                    if mission.subject_id is not None:
-                        study_statement = (
-                            study_statement.where(
-                                StudySession.subject_id
-                                == mission.subject_id
-                            )
-                        )
-
-                    sessions = session.scalars(
-                        study_statement
-                    ).all()
-
-                    mission.current_value = sum(
-                        item.duration_minutes
-                        for item in sessions
-                    )
-
-                elif (
-                    mission.mission_type
-                    == "focus_session"
-                ):
-                    study_statement = select(
-                        StudySession
-                    ).where(
-                        StudySession.session_date
-                        == today,
-                        StudySession.duration_minutes
-                        >= 25,
-                    )
-
-                    if mission.subject_id is not None:
-                        study_statement = (
-                            study_statement.where(
-                                StudySession.subject_id
-                                == mission.subject_id
-                            )
-                        )
-
-                    focused_sessions = (
-                        session.scalars(
-                            study_statement
-                        ).all()
-                    )
-
-                    mission.current_value = min(
-                        len(focused_sessions),
-                        mission.target_value,
-                    )
-
-                elif (
-                    mission.mission_type
-                    == "task_progress"
-                ):
-                    task_id = int(
-                        mission.source_key.split(
-                            ":",
-                            1,
-                        )[1]
-                    )
-
-                    task = session.get(
-                        AcademicTask,
-                        task_id,
-                    )
-
-                    if task is not None:
-                        mission.current_value = (
-                            1
-                            if (
-                                task.status
-                                == "completed"
-                                or task.progress_percentage
-                                > 0
-                            )
-                            else 0
-                        )
-
-                elif (
-                    mission.mission_type
-                    == "review"
-                ):
-                    # Con el modelo actual podemos usar
-                    # last_reviewed_at para comprobar si
-                    # hubo repasos hoy.
-                    review_statement = select(
-                        ReviewItem
-                    ).where(
-                        ReviewItem.last_reviewed_at
-                        .is_not(None)
-                    )
-
-                    if mission.subject_id is not None:
-                        review_statement = (
-                            review_statement.where(
-                                ReviewItem.subject_id
-                                == mission.subject_id
-                            )
-                        )
-
-                    review_items = session.scalars(
-                        review_statement
-                    ).all()
-
-                    reviewed_today = [
-                        item
-                        for item in review_items
-                        if (
-                            item.last_reviewed_at
-                            and item.last_reviewed_at.date()
+                    if (
+                        mission.mission_type
+                        == "study_minutes"
+                    ):
+                        study_statement = select(
+                            StudySession
+                        ).where(
+                            StudySession.session_date
                             == today
                         )
-                    ]
 
-                    mission.current_value = min(
-                        len(reviewed_today),
-                        mission.target_value,
+                        if mission.subject_id is not None:
+                            study_statement = (
+                                study_statement.where(
+                                    StudySession.subject_id
+                                    == mission.subject_id
+                                )
+                            )
+
+                        sessions = session.scalars(
+                            study_statement
+                        ).all()
+
+                        mission.current_value = sum(
+                            item.duration_minutes
+                            for item in sessions
+                        )
+
+                    elif (
+                        mission.mission_type
+                        == "focus_session"
+                    ):
+                        study_statement = select(
+                            StudySession
+                        ).where(
+                            StudySession.session_date
+                            == today,
+                            StudySession.duration_minutes
+                            >= 25,
+                        )
+
+                        if mission.subject_id is not None:
+                            study_statement = (
+                                study_statement.where(
+                                    StudySession.subject_id
+                                    == mission.subject_id
+                                )
+                            )
+
+                        focused_sessions = (
+                            session.scalars(
+                                study_statement
+                            ).all()
+                        )
+
+                        mission.current_value = min(
+                            len(focused_sessions),
+                            mission.target_value,
+                        )
+
+                    elif (
+                        mission.mission_type
+                        == "task_progress"
+                    ):
+                        task_id = int(
+                            mission.source_key.split(
+                                ":",
+                                1,
+                            )[1]
+                        )
+
+                        task = session.get(
+                            AcademicTask,
+                            task_id,
+                        )
+
+                        if task is not None:
+                            mission.current_value = (
+                                1
+                                if (
+                                    task.status
+                                    == "completed"
+                                    or task.progress_percentage
+                                    > 0
+                                )
+                                else 0
+                            )
+
+                    elif (
+                        mission.mission_type
+                        == "review"
+                    ):
+                        review_statement = select(
+                            ReviewItem
+                        ).where(
+                            ReviewItem.last_reviewed_at
+                            .is_not(None)
+                        )
+
+                        if mission.subject_id is not None:
+                            review_statement = (
+                                review_statement.where(
+                                    ReviewItem.subject_id
+                                    == mission.subject_id
+                                )
+                            )
+
+                        review_items = session.scalars(
+                            review_statement
+                        ).all()
+
+                        reviewed_today = [
+                            item
+                            for item in review_items
+                            if (
+                                item.last_reviewed_at
+                                and item.last_reviewed_at.date()
+                                == today
+                            )
+                        ]
+
+                        mission.current_value = min(
+                            len(reviewed_today),
+                            mission.target_value,
+                        )
+
+                    if (
+                        mission.current_value
+                        != previous_value
+                    ):
+                        updated += 1
+
+                    if (
+                        mission.current_value
+                        >= mission.target_value
+                    ):
+                        mission.current_value = (
+                            mission.target_value
+                        )
+
+                        mission.status = "completed"
+                        mission.completed_at = now
+                        newly_completed += 1
+
+                    mission.updated_at = now
+
+                if mission.status == "completed":
+                    reward_source_key = (
+                        f"daily_mission:{mission.id}"
                     )
 
-                if (
-                    mission.current_value
-                    != previous_value
-                ):
-                    updated += 1
-
-                if (
-                    mission.current_value
-                    >= mission.target_value
-                ):
-                    mission.current_value = (
-                        mission.target_value
+                    existing_reward = session.scalar(
+                        select(
+                            GamificationEvent
+                        ).where(
+                            GamificationEvent.source_key
+                            == reward_source_key
+                        )
                     )
 
-                    mission.status = "completed"
-                    mission.completed_at = now
-                    completed += 1
+                    if existing_reward is None:
+                        session.add(
+                            GamificationEvent(
+                                subject_id=(
+                                    mission.subject_id
+                                ),
+                                event_type=(
+                                    "daily_mission_completed"
+                                ),
+                                source_key=(
+                                    reward_source_key
+                                ),
+                                xp_points=(
+                                    mission.reward_xp
+                                ),
+                                description=(
+                                    "Misión completada: "
+                                    f"{mission.title}"
+                                ),
+                            )
+                        )
 
-                mission.updated_at = now
+                        rewarded_missions += 1
+                        xp_awarded += (
+                            mission.reward_xp
+                        )
 
             session.commit()
 
@@ -483,8 +529,12 @@ def register_mission_tools(mcp) -> None:
                     updated
                 ),
                 "newly_completed_count": (
-                    completed
+                    newly_completed
                 ),
+                "rewarded_mission_count": (
+                    rewarded_missions
+                ),
+                "xp_awarded": xp_awarded,
                 "missions": [
                     mission_to_dict(item)
                     for item in missions
@@ -492,7 +542,6 @@ def register_mission_tools(mcp) -> None:
                 "provider_called": False,
                 "estimated_cost_usd": 0,
             }
-
     @mcp.tool()
     def get_daily_missions(
         subject_id: int | None = None,

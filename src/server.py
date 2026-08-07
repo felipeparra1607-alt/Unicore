@@ -55,6 +55,9 @@ from src.gamification_tools import (
 from src.mission_tools import (
     register_mission_tools,
 )
+from src.boss_battle_tools import (
+    register_boss_battle_tools,
+)
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
@@ -76,6 +79,7 @@ register_assignment_preparation_tools(mcp)
 register_assignment_ai_tools(mcp)
 register_gamification_tools(mcp)
 register_mission_tools(mcp)
+register_boss_battle_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:

@@ -988,3 +988,77 @@ class DailyMission(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class BossBattle(Base):
+    __tablename__ = "boss_battles"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    assessment_id: Mapped[int] = mapped_column(
+        ForeignKey("assessments.id"),
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="preparing",
+        nullable=False,
+    )
+
+    target_score_percentage: Mapped[float] = mapped_column(
+        default=80.0,
+        nullable=False,
+    )
+
+    readiness_percentage: Mapped[float] = mapped_column(
+        default=0.0,
+        nullable=False,
+    )
+
+    weak_topics_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    recommended_actions_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    reward_xp: Mapped[int] = mapped_column(
+        default=150,
+        nullable=False,
+    )
+
+    best_score_percentage: Mapped[float | None] = mapped_column()
+
+    attempt_count: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    defeated_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
