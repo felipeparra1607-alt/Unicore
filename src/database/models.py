@@ -853,3 +853,138 @@ class RubricCriterion(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class GamificationEvent(Base):
+    __tablename__ = "gamification_events"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"),
+    )
+
+    event_type: Mapped[str] = mapped_column(
+        String(80),
+        nullable=False,
+    )
+
+    source_key: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    xp_points: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class AchievementUnlock(Base):
+    __tablename__ = "achievement_unlocks"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    achievement_key: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"),
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+    )
+
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    unlocked_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class DailyMission(Base):
+    __tablename__ = "daily_missions"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    mission_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+    )
+
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"),
+    )
+
+    mission_type: Mapped[str] = mapped_column(
+        String(80),
+        nullable=False,
+    )
+
+    source_key: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    target_value: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    current_value: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+
+    reward_xp: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="active",
+        nullable=False,
+    )
+
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

@@ -49,6 +49,12 @@ from src.assignment_preparation_tools import (
 from src.assignment_ai_tools import (
     register_assignment_ai_tools,
 )
+from src.gamification_tools import (
+    register_gamification_tools,
+)
+from src.mission_tools import (
+    register_mission_tools,
+)
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
@@ -68,6 +74,8 @@ register_grade_planner_tools(mcp)
 register_professor_rubric_tools(mcp)
 register_assignment_preparation_tools(mcp)
 register_assignment_ai_tools(mcp)
+register_gamification_tools(mcp)
+register_mission_tools(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
