@@ -643,3 +643,105 @@ class AcademicTask(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class Assessment(Base):
+    __tablename__ = "assessments"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    assessment_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    assessment_date: Mapped[date | None] = mapped_column(
+        Date,
+    )
+
+    weight_percentage: Mapped[float] = mapped_column(
+        nullable=False,
+    )
+
+    maximum_grade: Mapped[float] = mapped_column(
+        default=10.0,
+        nullable=False,
+    )
+
+    obtained_grade: Mapped[float | None] = mapped_column()
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="pending",
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    professor_feedback: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class GradeGoal(Base):
+    __tablename__ = "grade_goals"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    target_grade: Mapped[float] = mapped_column(
+        nullable=False,
+    )
+
+    maximum_grade: Mapped[float] = mapped_column(
+        default=10.0,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
