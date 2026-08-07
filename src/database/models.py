@@ -745,3 +745,111 @@ class GradeGoal(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class ProfessorPreference(Base):
+    __tablename__ = "professor_preferences"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    professor_id: Mapped[int] = mapped_column(
+        ForeignKey("professors.id"),
+        nullable=False,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    category: Mapped[str] = mapped_column(
+        String(80),
+        nullable=False,
+    )
+
+    preference: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    importance: Mapped[int] = mapped_column(
+        default=3,
+        nullable=False,
+    )
+
+    source_type: Mapped[str | None] = mapped_column(
+        String(50),
+    )
+
+    source_reference: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    confidence: Mapped[int] = mapped_column(
+        default=3,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class RubricCriterion(Base):
+    __tablename__ = "rubric_criteria"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+    )
+
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professors.id"),
+    )
+
+    assessment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assessments.id"),
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    weight_percentage: Mapped[float | None] = mapped_column()
+
+    maximum_points: Mapped[float | None] = mapped_column()
+
+    notes: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
