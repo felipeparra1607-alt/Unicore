@@ -1062,3 +1062,154 @@ class BossBattle(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+class KnowledgeConcept(Base):
+    __tablename__ = "knowledge_concepts"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_id",
+            "normalized_name",
+            name="uq_knowledge_concept_subject_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    normalized_name: Mapped[str] = mapped_column(
+        String(250),
+        nullable=False,
+    )
+
+    mastery_percentage: Mapped[float | None] = mapped_column(
+        Float,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        default="unassessed",
+        nullable=False,
+    )
+
+    evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    assessed_evidence_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    exposure_minutes: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    last_evidence_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class KnowledgeEvidence(Base):
+    __tablename__ = "knowledge_evidence"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "concept_id",
+            "source_type",
+            "source_id",
+            name="uq_knowledge_evidence_source",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True,
+    )
+
+    concept_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "knowledge_concepts.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"),
+        nullable=False,
+        index=True,
+    )
+
+    source_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    source_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    evidence_score: Mapped[float | None] = mapped_column(
+        Float,
+    )
+
+    weight: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        nullable=False,
+    )
+
+    exposure_minutes: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
