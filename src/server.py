@@ -67,6 +67,13 @@ from src.analytics_tools import (
 from src.academic_risk_tools import (
     register_academic_risk_tools,
 )
+from src.mcp_resources import (
+    register_mcp_resources,
+)
+from src.mcp_catalog import (
+    apply_public_tool_catalog,
+)
+
 
 mcp = MCPServer("UniCore")
 register_chunk_tools(mcp)
@@ -92,6 +99,7 @@ register_boss_battle_tools(mcp)
 register_unicore_dashboard_tools(mcp)
 register_analytics_tools(mcp)
 register_academic_risk_tools(mcp)
+register_mcp_resources(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
@@ -981,3 +989,8 @@ def delete_document(document_id: int) -> dict:
             "original_file_deleted": False,
             "document": document_data,
         }
+
+
+# Aplicamos el catálogo público después de que
+# todas las Tools hayan sido registradas.
+apply_public_tool_catalog(mcp)
