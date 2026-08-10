@@ -587,6 +587,59 @@ C) Terminar:
 No escribas Markdown fuera del JSON.
 """.strip()
 
+def get_observation_context_metrics(
+    observations: list[dict],
+) -> dict:
+    """
+    Mide cuánto contexto acumulado estamos
+    reenviando al modelo en cada vuelta.
+
+    Solo mide. No modifica ni resume datos.
+    """
+
+    if not observations:
+        return {
+            "observation_count": 0,
+            "observation_characters": 0,
+            "largest_observation_characters": 0,
+        }
+
+    serialized_observations = json.dumps(
+        observations,
+        ensure_ascii=False,
+        default=str,
+        separators=(
+            ",",
+            ":",
+        ),
+    )
+
+    individual_sizes = [
+        len(
+            json.dumps(
+                observation,
+                ensure_ascii=False,
+                default=str,
+                separators=(
+                    ",",
+                    ":",
+                ),
+            )
+        )
+        for observation in observations
+    ]
+
+    return {
+        "observation_count": (
+            len(observations)
+        ),
+        "observation_characters": (
+            len(serialized_observations)
+        ),
+        "largest_observation_characters": (
+            max(individual_sizes)
+        ),
+    }
 
 def build_agent_user_message(
     user_request: str,
@@ -850,6 +903,7 @@ class UniCoreAgent:
             trace: list[dict] = []
 
             used_calls: set[str] = set()
+            context_metrics: list[dict] = []
 
             for step_number in range(
                 1,
@@ -865,6 +919,23 @@ class UniCoreAgent:
                         ),
                     )
                 )
+
+                observation_metrics = (
+                    get_observation_context_metrics(
+                        observations
+                    )
+                )
+
+                context_metrics.append({
+                    "step": step_number,
+                    "system_message_characters": (
+                        len(system_message)
+                    ),
+                    "user_message_characters": (
+                        len(user_message)
+                    ),
+                    **observation_metrics,
+                })
 
                 decision = None
                 generation = None
@@ -962,6 +1033,9 @@ class UniCoreAgent:
                                         ]
                                     ),
                                 },
+                                "context_metrics": (
+                                    context_metrics
+                                ),
                                 "steps_used": (
                                     step_number
                                 ),
@@ -1014,6 +1088,9 @@ class UniCoreAgent:
                                 ]
                             ),
                         },
+                        "context_metrics": (
+                            context_metrics
+                        ),
                         "steps_used": (
                             step_number
                         ),
@@ -1147,6 +1224,9 @@ class UniCoreAgent:
                                 ]
                             ),
                         },
+                        "context_metrics": (
+                            context_metrics
+                        ),
                         "steps_used": (
                             step_number
                         ),
@@ -1529,6 +1609,9 @@ class UniCoreAgent:
                         ]
                     ),
                 },
+                "context_metrics": (
+                    context_metrics
+                ),
                 "steps_used": (
                     self.maximum_steps
                 ),

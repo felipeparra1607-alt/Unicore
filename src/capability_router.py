@@ -16,6 +16,11 @@ class CapabilitySelection:
     template_fragments: frozenset[str]
 
 
+# ============================================================
+# NORMALIZACIÓN
+# ============================================================
+
+
 def normalize_text(
     value: str,
 ) -> str:
@@ -35,14 +40,18 @@ def normalize_text(
     )
 
 
+def contains_any(
+    text: str,
+    expressions: tuple[str, ...],
+) -> bool:
+    return any(
+        expression in text
+        for expression in expressions
+    )
+
+
 # ============================================================
 # CAPACIDADES BASE
-# ============================================================
-#
-# Se incluyen siempre.
-#
-# "subjects" es barato y permite resolver subject_id.
-# health_check queda disponible para diagnóstico.
 # ============================================================
 
 
@@ -60,12 +69,10 @@ BASE_RESOURCES = frozenset({
 # PERFILES
 # ============================================================
 #
-# IMPORTANTE:
+# Un perfil NO elige la Tool concreta.
 #
-# Un perfil NO decide qué Tool ejecutar.
-#
-# Solo reduce el espacio de capacidades que el agente
-# necesita considerar.
+# Solamente reduce el conjunto de capacidades
+# que verá el agente.
 # ============================================================
 
 
@@ -185,7 +192,7 @@ PROFILES = {
 
 
 # ============================================================
-# ESCRITURAS
+# TOOLS DE ESCRITURA
 # ============================================================
 
 
@@ -214,18 +221,8 @@ WRITE_REVIEW_TOOLS = frozenset({
 
 
 # ============================================================
-# DETECCIÓN GRUESA DEL DOMINIO
+# DETECCIÓN DE PERFILES
 # ============================================================
-
-
-def contains_any(
-    text: str,
-    expressions: tuple[str, ...],
-) -> bool:
-    return any(
-        expression in text
-        for expression in expressions
-    )
 
 
 def detect_profiles(
@@ -234,10 +231,10 @@ def detect_profiles(
     """
     Clasificación local y barata.
 
-    NO selecciona Tools concretas.
+    No decide una Tool concreta.
 
-    Puede devolver varios perfiles si la petición
-    mezcla objetivos.
+    Puede devolver varios perfiles cuando la petición
+    realmente mezcla varios objetivos.
     """
 
     text = normalize_text(
@@ -246,27 +243,48 @@ def detect_profiles(
 
     profiles: set[str] = set()
 
+    # --------------------------------------------------------
+    # PLANIFICACIÓN
+    # --------------------------------------------------------
+
+    planning_expressions = (
+        "que hago",
+        "que deberia hacer",
+        "que estudiar",
+        "que deberia estudiar",
+        "tengo 30 minutos",
+        "tengo 45 minutos",
+        "tengo 60 minutos",
+        "tengo una hora",
+        "tengo dos horas",
+        "prioridad",
+        "prioridades",
+        "plan de hoy",
+        "planificar",
+    )
+
     if contains_any(
         text,
-        (
-            "que hago",
-            "que deberia hacer",
-            "que estudiar",
-            "que deberia estudiar",
-            "tengo 30 minutos",
-            "tengo 45 minutos",
-            "tengo 60 minutos",
-            "tengo una hora",
-            "tengo dos horas",
-            "prioridad",
-            "prioridades",
-            "plan de hoy",
-            "planificar",
-        ),
+        planning_expressions,
     ):
         profiles.add(
             "planning"
         )
+
+    # --------------------------------------------------------
+    # KNOWLEDGE MAP
+    # --------------------------------------------------------
+    #
+    # IMPORTANTE:
+    #
+    # Antes teníamos "como voy".
+    #
+    # Eso era demasiado genérico:
+    #
+    # "¿Cómo voy de nota?"
+    #
+    # activaba simultáneamente knowledge + grades.
+    # --------------------------------------------------------
 
     if contains_any(
         text,
@@ -282,13 +300,17 @@ def detect_profiles(
             "fortaleza",
             "fortalezas",
             "knowledge",
-            "como voy",
             "progreso de aprendizaje",
+            "nivel de dominio",
         ),
     ):
         profiles.add(
             "knowledge"
         )
+
+    # --------------------------------------------------------
+    # DOCUMENTOS / RAG
+    # --------------------------------------------------------
 
     if contains_any(
         text,
@@ -300,14 +322,18 @@ def detect_profiles(
             "archivos",
             "segun mis documentos",
             "segun mis apuntes",
-            "busca",
-            "buscar",
+            "busca en mis documentos",
+            "buscar en mis documentos",
             "rag",
         ),
     ):
         profiles.add(
             "documents"
         )
+
+    # --------------------------------------------------------
+    # NOTAS / EVALUACIONES
+    # --------------------------------------------------------
 
     if contains_any(
         text,
@@ -331,6 +357,10 @@ def detect_profiles(
             "grades"
         )
 
+    # --------------------------------------------------------
+    # REPASOS
+    # --------------------------------------------------------
+
     if contains_any(
         text,
         (
@@ -344,6 +374,10 @@ def detect_profiles(
         profiles.add(
             "reviews"
         )
+
+    # --------------------------------------------------------
+    # PROFESORES
+    # --------------------------------------------------------
 
     if contains_any(
         text,
@@ -359,28 +393,49 @@ def detect_profiles(
             "professor"
         )
 
+    # --------------------------------------------------------
+    # ESTUDIO
+    # --------------------------------------------------------
+
     if contains_any(
         text,
         (
-            "estudiar",
-            "estudio",
             "sesion de estudio",
+            "modo de estudio",
             "quiz",
             "test",
-            "preguntas",
+            "preguntas de estudio",
+            "estudiar",
+            "estudio",
         ),
     ):
         profiles.add(
             "study"
         )
 
+    # --------------------------------------------------------
+    # TAREAS
+    # --------------------------------------------------------
+    #
+    # IMPORTANTE:
+    #
+    # Antes "pendiente" y "pendientes" activaban tasks.
+    #
+    # Eso provocaba:
+    #
+    # "una evaluación pendiente"
+    #
+    # → grades + tasks
+    #
+    # aunque la petición no tuviera nada que ver
+    # con AcademicTask.
+    # --------------------------------------------------------
+
     if contains_any(
         text,
         (
             "tarea",
             "tareas",
-            "pendiente",
-            "pendientes",
             "assignment",
             "trabajo",
             "entrega",
@@ -390,7 +445,34 @@ def detect_profiles(
             "tasks"
         )
 
+    # --------------------------------------------------------
+    # DESAMBIGUACIÓN
+    # --------------------------------------------------------
+    #
+    # "¿Qué debería estudiar?"
+    #
+    # es planificación, no necesita además cargar
+    # todo el perfil study.
+    # --------------------------------------------------------
+
+    if (
+        "planning" in profiles
+        and "study" in profiles
+        and contains_any(
+            text,
+            planning_expressions,
+        )
+    ):
+        profiles.discard(
+            "study"
+        )
+
     return profiles
+
+
+# ============================================================
+# CONSTRUCCIÓN DE SELECCIÓN
+# ============================================================
 
 
 def build_capability_selection(
@@ -400,8 +482,8 @@ def build_capability_selection(
     """
     Construye el subconjunto inicial de capacidades.
 
-    Si no reconoce con suficiente claridad el dominio,
-    usa fallback amplio para no reducir recall.
+    Si no reconocemos ninguna familia con suficiente
+    confianza, se conserva el fallback amplio.
     """
 
     profiles = detect_profiles(
@@ -409,14 +491,7 @@ def build_capability_selection(
     )
 
     # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
-    #
-    # Si no reconocemos ninguna familia, no queremos
-    # bloquear al agente.
-    #
-    # En ese caso indicamos broad_fallback=True y
-    # unicore_agent conservará su catálogo anterior.
+    # FALLBACK AMPLIO
     # --------------------------------------------------------
 
     if not profiles:
@@ -466,7 +541,13 @@ def build_capability_selection(
             user_request
         )
 
-        if "tarea" in text:
+        if contains_any(
+            text,
+            (
+                "tarea",
+                "tareas",
+            ),
+        ):
             tools.update(
                 WRITE_TASK_TOOLS
             )
@@ -514,6 +595,11 @@ def build_capability_selection(
             template_fragments
         ),
     }
+
+
+# ============================================================
+# FILTROS
+# ============================================================
 
 
 def filter_tools(
