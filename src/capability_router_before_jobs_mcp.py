@@ -176,20 +176,6 @@ PROFILES = {
         }),
     ),
 
-    "jobs": CapabilitySelection(
-        profile="jobs",
-        tool_names=frozenset({
-            "get_job_status",
-            "list_jobs",
-        }),
-        direct_resource_uris=frozenset({
-            "unicore://jobs",
-        }),
-        template_fragments=frozenset({
-            "/jobs",
-        }),
-    ),
-
     "tasks": CapabilitySelection(
         profile="tasks",
         tool_names=frozenset({
@@ -428,41 +414,6 @@ def detect_profiles(
         )
 
     # --------------------------------------------------------
-    # JOBS / TRABAJOS DELEGADOS
-    # --------------------------------------------------------
-
-    job_expressions = (
-        "job",
-        "jobs",
-        "trabajo de unicore",
-        "trabajos de unicore",
-        "trabajo delegado",
-        "trabajos delegados",
-        "resultado del trabajo",
-        "resultado del analisis",
-        "resultado del informe",
-        "analisis que pedi",
-        "informe que pedi",
-        "trabajo que pedi",
-        "como va mi analisis",
-        "como va el analisis",
-        "como va mi trabajo",
-        "ya termino el analisis",
-        "ya termino mi analisis",
-        "ya termino el trabajo",
-        "estado del analisis",
-        "estado del trabajo",
-    )
-
-    if contains_any(
-        text,
-        job_expressions,
-    ):
-        profiles.add(
-            "jobs"
-        )
-
-    # --------------------------------------------------------
     # TAREAS
     # --------------------------------------------------------
     #
@@ -491,22 +442,6 @@ def detect_profiles(
         ),
     ):
         profiles.add(
-            "tasks"
-        )
-
-    # --------------------------------------------------------
-    # JOBS VS TAREAS ACADÉMICAS
-    # --------------------------------------------------------
-
-    if (
-        "jobs" in profiles
-        and "tasks" in profiles
-        and contains_any(
-            text,
-            job_expressions,
-        )
-    ):
-        profiles.discard(
             "tasks"
         )
 

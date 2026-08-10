@@ -79,9 +79,6 @@ from src.knowledge_map import (
 from src.decision_engine import (
     register_decision_engine,
 )
-from src.jobs_mcp import (
-    register_jobs_mcp,
-)
 
 
 mcp = MCPServer("UniCore")
@@ -111,7 +108,6 @@ register_academic_risk_tools(mcp)
 register_mcp_resources(mcp)
 register_knowledge_map(mcp)
 register_decision_engine(mcp)
-register_jobs_mcp(mcp)
 
 
 def subject_to_dict(subject: Subject) -> dict:
