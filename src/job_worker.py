@@ -67,6 +67,10 @@ SUPPORTED_WORKER_MODES = {
 
 DEFAULT_RAG_CONTEXT_CHARACTERS = 8000
 DEFAULT_MAXIMUM_OUTPUT_TOKENS = 2200
+LONG_ANALYSIS_MAXIMUM_OUTPUT_TOKENS = 3200
+LONG_ANALYSIS_CONTINUATION_OUTPUT_TOKENS = 1200
+LONG_ANALYSIS_MAXIMUM_CONTINUATIONS = 1
+LONG_ANALYSIS_CONTINUATION_TAIL_CHARACTERS = 6000
 
 
 # ============================================================
@@ -601,7 +605,15 @@ REGLAS:
 3. Identifica patrones, riesgos y prioridades.
 4. No inventes datos ausentes.
 5. No devuelvas JSON.
-6. Produce un análisis estructurado y útil.
+6. Produce un análisis estructurado, útil y completo.
+7. Prioriza cobertura sobre extensión: desarrolla todas las partes
+   solicitadas antes de profundizar en detalles secundarios.
+8. Evita repetir el mismo dato, riesgo, prioridad o recomendación
+   en secciones diferentes.
+9. Limita el informe a las secciones necesarias para diagnóstico,
+   riesgos, prioridades, plan y seguimiento.
+10. Debes cerrar el informe dentro del presupuesto de salida. Si
+    falta espacio, resume y concluye; no abras nuevas secciones largas.
 """.strip()
 
         user_message = f"""
@@ -623,9 +635,70 @@ Genera el análisis final.
         return GenerationRequest(
             system_message=system_message,
             user_message=user_message,
-            maximum_output_tokens=1800,
+            maximum_output_tokens=(
+                LONG_ANALYSIS_MAXIMUM_OUTPUT_TOKENS
+            ),
         )
 
+
+    def _build_long_analysis_continuation_request(
+        self,
+        *,
+        job,
+        evidence: str,
+        current_answer: str,
+        continuation_number: int,
+    ) -> GenerationRequest:
+        del evidence
+        del continuation_number
+
+        answer_tail = current_answer[
+            -LONG_ANALYSIS_CONTINUATION_TAIL_CHARACTERS:
+        ]
+
+        system_message = """
+Eres el executor de análisis académicos largos de UniCore.
+
+El informe anterior quedó interrumpido por el límite de salida.
+Tu única tarea es TERMINARLO de forma breve y natural.
+
+REGLAS:
+1. Continúa desde el punto donde terminó el fragmento recibido.
+2. No reinicies el informe ni repitas secciones ya cubiertas.
+3. No vuelvas a desarrollar diagnóstico, fortalezas, riesgos o
+   prioridades que ya aparezcan en el fragmento.
+4. No introduzcas hechos nuevos: utiliza únicamente la información
+   ya establecida en el texto previo.
+5. Completa solo lo imprescindible que falte del plan, seguimiento
+   o conclusión.
+6. Si una sección quedó a medias, termínala y pasa directamente al
+   cierre.
+7. No devuelvas JSON.
+8. Debes terminar el informe completamente dentro de esta respuesta.
+9. Sé conciso: no abras nuevas secciones extensas.
+""".strip()
+
+        user_message = f"""
+OBJETIVO ORIGINAL:
+{job.objective}
+
+RESULTADO ESPERADO:
+{job.expected_output}
+
+ÚLTIMO FRAGMENTO DEL INFORME YA GENERADO:
+{answer_tail}
+
+Continúa exactamente desde ahí, completa solo lo pendiente y cierra
+el informe. No repitas contenido anterior.
+""".strip()
+
+        return GenerationRequest(
+            system_message=system_message,
+            user_message=user_message,
+            maximum_output_tokens=(
+                LONG_ANALYSIS_CONTINUATION_OUTPUT_TOKENS
+            ),
+        )
 
     async def _execute_long_analysis(
         self,
@@ -682,6 +755,123 @@ Genera el análisis final.
                 "long_analysis devolvió vacío"
             )
 
+        usage = {
+            "model_calls": 1,
+            "input_tokens": (
+                generation.input_tokens
+                or 0
+            ),
+            "output_tokens": (
+                generation.output_tokens
+                or 0
+            ),
+            "total_tokens": (
+                generation.total_tokens
+                or 0
+            ),
+            "estimated_cost_usd": (
+                generation
+                .estimated_total_cost_usd
+                or 0.0
+            ),
+        }
+
+        continuations_used = 0
+        truncated_generations = (
+            1
+            if generation.truncated
+            else 0
+        )
+
+        while (
+            generation.truncated
+            and continuations_used
+            < LONG_ANALYSIS_MAXIMUM_CONTINUATIONS
+        ):
+            continuation_number = (
+                continuations_used
+                + 1
+            )
+
+            continuation_request = (
+                self
+                ._build_long_analysis_continuation_request(
+                    job=job,
+                    evidence=evidence,
+                    current_answer=answer,
+                    continuation_number=(
+                        continuation_number
+                    ),
+                )
+            )
+
+            continuation_generation = (
+                await asyncio.to_thread(
+                    provider.generate,
+                    continuation_request,
+                )
+            )
+
+            if not continuation_generation.ok:
+                raise RuntimeError(
+                    continuation_generation.error
+                    or (
+                        "Falló la continuación de "
+                        "long_analysis"
+                    )
+                )
+
+            continuation_text = str(
+                continuation_generation.text
+                or ""
+            ).strip()
+
+            if not continuation_text:
+                raise RuntimeError(
+                    (
+                        "La continuación de long_analysis "
+                        "devolvió vacío"
+                    )
+                )
+
+            answer = (
+                answer.rstrip()
+                + "\n"
+                + continuation_text.lstrip()
+            )
+
+            usage["model_calls"] += 1
+            usage["input_tokens"] += (
+                continuation_generation.input_tokens
+                or 0
+            )
+            usage["output_tokens"] += (
+                continuation_generation.output_tokens
+                or 0
+            )
+            usage["total_tokens"] += (
+                continuation_generation.total_tokens
+                or 0
+            )
+            usage["estimated_cost_usd"] += (
+                continuation_generation
+                .estimated_total_cost_usd
+                or 0.0
+            )
+
+            continuations_used += 1
+
+            if continuation_generation.truncated:
+                truncated_generations += 1
+
+            generation = (
+                continuation_generation
+            )
+
+        still_truncated = bool(
+            generation.truncated
+        )
+
         return {
             "worker_mode": (
                 WORKER_MODE_EXECUTE
@@ -696,26 +886,25 @@ Genera el análisis final.
             "evidence_characters": (
                 len(evidence)
             ),
-            "usage": {
-                "model_calls": 1,
-                "input_tokens": (
-                    generation.input_tokens
-                    or 0
-                ),
-                "output_tokens": (
-                    generation.output_tokens
-                    or 0
-                ),
-                "total_tokens": (
-                    generation.total_tokens
-                    or 0
-                ),
-                "estimated_cost_usd": (
-                    generation
-                    .estimated_total_cost_usd
-                    or 0.0
-                ),
-            },
+            "continuations_used": (
+                continuations_used
+            ),
+            "truncated_generations": (
+                truncated_generations
+            ),
+            "truncated": (
+                still_truncated
+            ),
+            "completion_warning": (
+                (
+                    "El análisis alcanzó el límite de salida "
+                    "incluso después de las continuaciones "
+                    "permitidas."
+                )
+                if still_truncated
+                else None
+            ),
+            "usage": usage,
         }
 
 

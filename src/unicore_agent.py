@@ -6,6 +6,7 @@ import json
 import re
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from src.ai_config import (
@@ -58,7 +59,6 @@ from src.runtime_context import (
     build_runtime_context,
     runtime_context_to_dict,
 )
-
 
 # ============================================================
 # CATÁLOGO DEL AGENTE
@@ -1080,6 +1080,24 @@ class UniCoreAgent:
                         self.prompt_version
                     ),
                 )
+            )
+
+            current_local_date = (
+                datetime.now()
+                .astimezone()
+                .date()
+                .isoformat()
+            )
+
+            system_message += (
+                "\n\nCONTEXTO TEMPORAL DE EJECUCIÓN:\n"
+                f"Fecha local actual: {current_local_date}.\n"
+                "Interpreta expresiones temporales relativas como "
+                "'hoy', 'mañana', 'pasado mañana' y 'ayer' tomando "
+                "esta fecha como referencia. Si una Tool requiere una "
+                "fecha en formato YYYY-MM-DD y la expresión del usuario "
+                "es inequívoca, conviértela directamente. No pidas al "
+                "usuario una fecha exacta innecesariamente."
             )
 
             observations: list[dict] = []
