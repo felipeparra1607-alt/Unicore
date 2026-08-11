@@ -1001,8 +1001,10 @@ def delete_document(document_id: int) -> dict:
             "original_file_deleted": False,
             "document": document_data,
         }
-
-
 # Aplicamos el catálogo público después de que
 # todas las Tools hayan sido registradas.
 apply_public_tool_catalog(mcp)
+
+
+if __name__ == "__main__":
+    mcp.run()

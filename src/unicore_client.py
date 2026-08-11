@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 
-from typing import Any
+from contextlib import AsyncExitStack
+from pathlib import Path
+from typing import Any, Literal
 
-from mcp import Client
+from mcp import Client, ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
 from src.server import mcp
 
@@ -100,28 +104,115 @@ class UniCoreMCPClient:
     """
     Cliente MCP propio de UniCore.
 
-    En esta primera versión utiliza conexión
-    MCP en memoria contra nuestro MCPServer.
+    Soporta dos transportes locales:
 
-    Esto nos permite probar el protocolo y
-    capacidades del servidor sin Inspector
-    y sin depender todavía del transporte.
+    - inprocess:
+      conecta directamente con el objeto MCPServer.
+      Es el modo por defecto y se mantiene para tests,
+      evals y ejecución interna.
+
+    - stdio:
+      lanza UniCore como un proceso MCP separado y se
+      comunica mediante stdin/stdout.
+
+    Streamable HTTP queda fuera de esta fase de forma
+    intencionada.
     """
 
     def __init__(
         self,
+        transport: Literal[
+            "inprocess",
+            "stdio",
+        ] = "inprocess",
     ) -> None:
-        self._client_context = Client(
-            mcp
-        )
+        if transport not in {
+            "inprocess",
+            "stdio",
+        }:
+            raise ValueError(
+                "transport debe ser "
+                "'inprocess' o 'stdio'"
+            )
 
-        self.client: Client | None = None
+        self.transport = transport
+
+        self._exit_stack: (
+            AsyncExitStack | None
+        ) = None
+
+        self._initialize_result: Any = None
+
+        self.client: (
+            Client | ClientSession | None
+        ) = None
 
     async def __aenter__(
         self,
     ) -> "UniCoreMCPClient":
+        self._exit_stack = (
+            AsyncExitStack()
+        )
+
+        await self._exit_stack.__aenter__()
+
+        if self.transport == "inprocess":
+            client = Client(
+                mcp
+            )
+
+            self.client = (
+                await self._exit_stack
+                .enter_async_context(
+                    client
+                )
+            )
+
+            return self
+
+        project_root = (
+            Path(__file__)
+            .resolve()
+            .parent
+            .parent
+        )
+
+        server_parameters = (
+            StdioServerParameters(
+                command=sys.executable,
+                args=[
+                    "-m",
+                    "src.server",
+                ],
+                cwd=str(
+                    project_root
+                ),
+            )
+        )
+
+        read_stream, write_stream = (
+            await self._exit_stack
+            .enter_async_context(
+                stdio_client(
+                    server_parameters
+                )
+            )
+        )
+
+        session = ClientSession(
+            read_stream,
+            write_stream,
+        )
+
         self.client = (
-            await self._client_context.__aenter__()
+            await self._exit_stack
+            .enter_async_context(
+                session
+            )
+        )
+
+        self._initialize_result = (
+            await self.client.initialize()
         )
 
         return self
@@ -132,17 +223,20 @@ class UniCoreMCPClient:
         exc_value,
         traceback,
     ) -> None:
-        await self._client_context.__aexit__(
-            exc_type,
-            exc_value,
-            traceback,
-        )
+        if self._exit_stack is not None:
+            await self._exit_stack.__aexit__(
+                exc_type,
+                exc_value,
+                traceback,
+            )
 
+        self._exit_stack = None
+        self._initialize_result = None
         self.client = None
 
     def require_client(
         self,
-    ) -> Client:
+    ) -> Client | ClientSession:
         """
         Evita utilizar el cliente fuera del
         bloque async with.
@@ -155,6 +249,55 @@ class UniCoreMCPClient:
 
         return self.client
 
+    def _initialize_value(
+        self,
+        *names: str,
+    ) -> Any:
+        result = self._initialize_result
+
+        if result is None:
+            return None
+
+        for name in names:
+            if hasattr(
+                result,
+                name,
+            ):
+                return getattr(
+                    result,
+                    name,
+                )
+
+        if hasattr(
+            result,
+            "model_dump",
+        ):
+            data = result.model_dump(
+                mode="python",
+                by_alias=False,
+            )
+
+            for name in names:
+                if name in data:
+                    return data[
+                        name
+                    ]
+
+            alias_data = (
+                result.model_dump(
+                    mode="python",
+                    by_alias=True,
+                )
+            )
+
+            for name in names:
+                if name in alias_data:
+                    return alias_data[
+                        name
+                    ]
+
+        return None
+
     async def server_metadata(
         self,
     ) -> dict:
@@ -164,20 +307,58 @@ class UniCoreMCPClient:
 
         client = self.require_client()
 
+        if self.transport == "inprocess":
+            return {
+                "transport": (
+                    self.transport
+                ),
+                "protocol_version": (
+                    client.protocol_version
+                ),
+                "server_info": (
+                    to_jsonable(
+                        client.server_info
+                    )
+                ),
+                "server_capabilities": (
+                    to_jsonable(
+                        client.server_capabilities
+                    )
+                ),
+                "instructions": (
+                    client.instructions
+                ),
+            }
+
         return {
-            "protocol_version": (
-                client.protocol_version
+            "transport": (
+                self.transport
             ),
-            "server_info": to_jsonable(
-                client.server_info
+            "protocol_version": (
+                self._initialize_value(
+                    "protocolVersion",
+                    "protocol_version",
+                )
+            ),
+            "server_info": (
+                to_jsonable(
+                    self._initialize_value(
+                        "serverInfo",
+                        "server_info",
+                    )
+                )
             ),
             "server_capabilities": (
                 to_jsonable(
-                    client.server_capabilities
+                    self._initialize_value(
+                        "capabilities",
+                    )
                 )
             ),
             "instructions": (
-                client.instructions
+                self._initialize_value(
+                    "instructions",
+                )
             ),
         }
 
@@ -299,9 +480,8 @@ class UniCoreMCPClient:
         """
         Descubre Prompts públicos.
 
-        Actualmente esperamos 0 porque los
-        Prompts de UniCore siguen desactivados
-        hasta la fase de evals.
+        En UniCore permanecen desactivados
+        intencionadamente.
         """
 
         client = self.require_client()
@@ -480,8 +660,23 @@ class UniCoreMCPClient:
         )
 
         structured_content = (
-            result.structured_content
+            getattr(
+                result,
+                "structured_content",
+                None,
+            )
         )
+
+        if (
+            structured_content is None
+            and hasattr(
+                result,
+                "structuredContent",
+            )
+        ):
+            structured_content = (
+                result.structuredContent
+            )
 
         text_content = []
 
@@ -515,24 +710,35 @@ class UniCoreMCPClient:
         else:
             data = text_content
 
+        is_error = bool(
+            getattr(
+                result,
+                "is_error",
+                getattr(
+                    result,
+                    "isError",
+                    False,
+                ),
+            )
+        )
+
         return {
-            "ok": not result.is_error,
-            "mcp_is_error": (
-                result.is_error
-            ),
+            "ok": not is_error,
+            "mcp_is_error": is_error,
             "tool": name,
             "data": data,
         }
 
 
 async def run_catalog(
+    transport: str,
 ) -> None:
     """
     Muestra un catálogo compacto,
     no todos los schemas completos.
     """
 
-    async with UniCoreMCPClient() as client:
+    async with UniCoreMCPClient(transport=transport) as client:
         discovery = (
             await client.discover()
         )
@@ -597,8 +803,9 @@ async def run_catalog(
 
 async def run_resource(
     uri: str,
+    transport: str,
 ) -> None:
-    async with UniCoreMCPClient() as client:
+    async with UniCoreMCPClient(transport=transport) as client:
         result = (
             await client.read_resource(
                 uri
@@ -618,6 +825,7 @@ async def run_resource(
 async def run_tool(
     name: str,
     arguments_text: str,
+    transport: str,
 ) -> None:
     try:
         arguments = json.loads(
@@ -638,7 +846,7 @@ async def run_tool(
             "un objeto JSON"
         )
 
-    async with UniCoreMCPClient() as client:
+    async with UniCoreMCPClient(transport=transport) as client:
         result = await client.call_tool(
             name,
             arguments,
@@ -655,6 +863,7 @@ async def run_tool(
 
 
 async def run_smoke_test(
+    transport: str,
 ) -> None:
     """
     Validación integral del MCP Client.
@@ -671,7 +880,7 @@ async def run_smoke_test(
     - ejecución real de Tools
     """
 
-    async with UniCoreMCPClient() as client:
+    async with UniCoreMCPClient(transport=transport) as client:
         discovery = (
             await client.discover()
         )
@@ -1036,6 +1245,19 @@ def build_parser(
         )
     )
 
+    parser.add_argument(
+        "--transport",
+        choices=(
+            "inprocess",
+            "stdio",
+        ),
+        default="inprocess",
+        help=(
+            "Transporte MCP local. "
+            "Por defecto: inprocess."
+        ),
+    )
+
     subparsers = (
         parser.add_subparsers(
             dest="command",
@@ -1135,12 +1357,15 @@ async def async_main(
     args = parser.parse_args()
 
     if args.command == "catalog":
-        await run_catalog()
+        await run_catalog(
+            args.transport
+        )
         return
 
     if args.command == "resource":
         await run_resource(
-            args.uri
+            args.uri,
+            args.transport,
         )
         return
 
@@ -1181,11 +1406,14 @@ async def async_main(
         await run_tool(
             args.name,
             tool_arguments,
+            args.transport,
         )
         return
 
     if args.command == "smoke":
-        await run_smoke_test()
+        await run_smoke_test(
+            args.transport
+        )
         return
 
     parser.error(
