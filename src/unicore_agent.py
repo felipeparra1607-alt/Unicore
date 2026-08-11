@@ -53,6 +53,12 @@ from src.jobs import (
     job_to_dict,
 )
 
+from src.runtime_context import (
+    RuntimeContext,
+    build_runtime_context,
+    runtime_context_to_dict,
+)
+
 
 # ============================================================
 # CATÁLOGO DEL AGENTE
@@ -850,6 +856,7 @@ class UniCoreAgent:
         maximum_output_tokens: int = 450,
         allow_writes: bool = False,
         prompt_version: str = DEFAULT_PROMPT_VERSION,
+        runtime_context: RuntimeContext | None = None,
     ) -> None:
         if (
             maximum_steps < 1
@@ -887,8 +894,17 @@ class UniCoreAgent:
             maximum_output_tokens
         )
 
+        if runtime_context is None:
+            runtime_context = build_runtime_context(
+                allow_writes=allow_writes,
+            )
+
+        self.runtime_context = runtime_context
+
+        # Compatibilidad con el código y los evals existentes.
+        # La fuente de verdad pasa a ser RuntimeContext.
         self.allow_writes = (
-            allow_writes
+            self.runtime_context.allow_writes
         )
 
         if (
@@ -976,6 +992,11 @@ class UniCoreAgent:
                 "ok": False,
                 "error": (
                     "La petición no puede estar vacía"
+                ),
+                "runtime_context": (
+                    runtime_context_to_dict(
+                        self.runtime_context
+                    )
                 ),
             }
 
@@ -1165,6 +1186,11 @@ class UniCoreAgent:
                         ):
                             return {
                                 "ok": False,
+                                "runtime_context": (
+                                    runtime_context_to_dict(
+                                        self.runtime_context
+                                    )
+                                ),
                                 "error": (
                                     "El agente no pudo generar "
                                     "una decisión válida"
@@ -1223,6 +1249,11 @@ class UniCoreAgent:
                 ):
                     return {
                         "ok": False,
+                        "runtime_context": (
+                            runtime_context_to_dict(
+                                self.runtime_context
+                            )
+                        ),
                         "error": (
                             "El agente no produjo "
                             "una decisión utilizable"
@@ -1363,6 +1394,11 @@ class UniCoreAgent:
                     return {
                         "ok": True,
                         "answer": answer,
+                        "runtime_context": (
+                            runtime_context_to_dict(
+                                self.runtime_context
+                            )
+                        ),
                         "capability_selection": {
                             "profiles": (
                                 capability_selection[
@@ -1548,7 +1584,10 @@ class UniCoreAgent:
                     job = (
                         job_manager
                         .create_from_handoff(
-                            handoff_request
+                            handoff_request,
+                            runtime_context=(
+                                self.runtime_context
+                            ),
                         )
                     )
 
@@ -1584,6 +1623,11 @@ class UniCoreAgent:
                         "ok": True,
                         "status": (
                             "handoff_requested"
+                        ),
+                        "runtime_context": (
+                            runtime_context_to_dict(
+                                self.runtime_context
+                            )
                         ),
                         "handoff": (
                             serialized_handoff
@@ -1786,6 +1830,11 @@ class UniCoreAgent:
                                     "ok": True,
                                     "answer": (
                                         job_answer
+                                    ),
+                                    "runtime_context": (
+                                        runtime_context_to_dict(
+                                            self.runtime_context
+                                        )
                                     ),
                                     "capability_selection": {
                                         "profiles": (
@@ -2079,6 +2128,11 @@ class UniCoreAgent:
 
             return {
                 "ok": False,
+                "runtime_context": (
+                    runtime_context_to_dict(
+                        self.runtime_context
+                    )
+                ),
                 "error": (
                     "El agente alcanzó el límite "
                     "de pasos sin terminar"
@@ -2142,16 +2196,28 @@ async def run_cli(
     allow_writes: bool,
     show_trace: bool,
     prompt_version: str,
+    conversation_id: str | None,
+    study_session_id: int | None,
+    allowed_paths: list[str],
 ) -> None:
+    runtime_context = build_runtime_context(
+        conversation_id=conversation_id,
+        study_session_id=study_session_id,
+        allow_writes=allow_writes,
+        allowed_paths=allowed_paths,
+    )
+
     agent = UniCoreAgent(
         provider_name=provider,
         maximum_steps=maximum_steps,
         maximum_output_tokens=(
             maximum_output_tokens
         ),
-        allow_writes=allow_writes,
         prompt_version=(
             prompt_version
+        ),
+        runtime_context=(
+            runtime_context
         ),
     )
 
@@ -2232,6 +2298,35 @@ def build_parser(
     )
 
     parser.add_argument(
+        "--conversation-id",
+        default=None,
+        help=(
+            "ID de conversación existente. "
+            "Si se omite se genera uno nuevo."
+        ),
+    )
+
+    parser.add_argument(
+        "--study-session-id",
+        type=int,
+        default=None,
+        help=(
+            "ID de sesión de estudio asociada."
+        ),
+    )
+
+    parser.add_argument(
+        "--allowed-path",
+        action="append",
+        default=[],
+        dest="allowed_paths",
+        help=(
+            "Ruta permitida para esta ejecución. "
+            "Puede repetirse varias veces."
+        ),
+    )
+
+    parser.add_argument(
         "--show-trace",
         action="store_true",
         help=(
@@ -2281,6 +2376,15 @@ def main(
             ),
             prompt_version=(
                 args.prompt_version
+            ),
+            conversation_id=(
+                args.conversation_id
+            ),
+            study_session_id=(
+                args.study_session_id
+            ),
+            allowed_paths=(
+                args.allowed_paths
             ),
         )
     )

@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from src.handoff import HandoffRequest
+from src.runtime_context import (
+    RuntimeContext,
+    build_runtime_context,
+)
 
 
 # ============================================================
@@ -59,29 +63,24 @@ SUPPORTED_JOB_STATUSES = {
 @dataclass(frozen=True)
 class Job:
     job_id: str
-
     status: str
-
     kind: str
-
     objective: str
-
     context_summary: str
-
     expected_output: str
-
     source_uris: tuple[str, ...]
-
     requires_write: bool
 
+    # Contexto de ejecución persistido.
+    conversation_id: str
+    study_session_id: int | None
+    allow_writes: bool
+    allowed_paths: tuple[str, ...]
+
     created_at: str
-
     started_at: str | None
-
     completed_at: str | None
-
     result: str | None
-
     error: str | None
 
 
@@ -118,29 +117,86 @@ def get_connection(
     return connection
 
 
-def row_to_job(
-    row: sqlite3.Row,
-) -> Job:
-    source_uris_raw = (
-        row["source_uris"]
+def _parse_json_list(
+    raw_value: Any,
+) -> list[str]:
+    raw_text = str(
+        raw_value
         or "[]"
     )
 
     try:
-        parsed_source_uris = (
-            json.loads(
-                source_uris_raw
+        parsed = json.loads(
+            raw_text
+        )
+    except json.JSONDecodeError:
+        parsed = []
+
+    if not isinstance(
+        parsed,
+        list,
+    ):
+        parsed = []
+
+    return [
+        str(value)
+        for value in parsed
+        if str(value).strip()
+    ]
+
+
+def _legacy_conversation_id(
+    job_id: str,
+) -> str:
+    clean_job_id = str(
+        job_id
+        or "legacy"
+    ).strip()
+
+    suffix = (
+        clean_job_id[4:]
+        if clean_job_id.startswith("job_")
+        else clean_job_id
+    )
+
+    return (
+        "conv_legacy_"
+        + suffix
+    )
+
+
+def row_to_job(
+    row: sqlite3.Row,
+) -> Job:
+    source_uris = _parse_json_list(
+        row["source_uris"]
+    )
+
+    allowed_paths = _parse_json_list(
+        row["allowed_paths"]
+    )
+
+    conversation_id = str(
+        row["conversation_id"]
+        or ""
+    ).strip()
+
+    if not conversation_id:
+        conversation_id = (
+            _legacy_conversation_id(
+                row["job_id"]
             )
         )
 
-    except json.JSONDecodeError:
-        parsed_source_uris = []
+    study_session_raw = (
+        row["study_session_id"]
+    )
 
-    if not isinstance(
-        parsed_source_uris,
-        list,
-    ):
-        parsed_source_uris = []
+    study_session_id = (
+        int(study_session_raw)
+        if study_session_raw is not None
+        else None
+    )
 
     return Job(
         job_id=(
@@ -166,13 +222,26 @@ def row_to_job(
             ]
         ),
         source_uris=tuple(
-            str(uri)
-            for uri in parsed_source_uris
+            source_uris
         ),
         requires_write=bool(
             row[
                 "requires_write"
             ]
+        ),
+        conversation_id=(
+            conversation_id
+        ),
+        study_session_id=(
+            study_session_id
+        ),
+        allow_writes=bool(
+            row[
+                "allow_writes"
+            ]
+        ),
+        allowed_paths=tuple(
+            allowed_paths
         ),
         created_at=(
             row[
@@ -215,7 +284,42 @@ def job_to_dict(
         job.source_uris
     )
 
+    result[
+        "allowed_paths"
+    ] = list(
+        job.allowed_paths
+    )
+
     return result
+
+
+def runtime_context_from_job(
+    job: Job,
+) -> RuntimeContext:
+    """
+    Reconstruye el RuntimeContext asociado a un Job.
+
+    El job_id se incorpora aquí porque el contexto persistido
+    pertenece ya a una ejecución concreta del Worker.
+    """
+
+    return build_runtime_context(
+        conversation_id=(
+            job.conversation_id
+        ),
+        job_id=(
+            job.job_id
+        ),
+        study_session_id=(
+            job.study_session_id
+        ),
+        allow_writes=(
+            job.allow_writes
+        ),
+        allowed_paths=(
+            job.allowed_paths
+        ),
+    )
 
 
 # ============================================================
@@ -223,8 +327,26 @@ def job_to_dict(
 # ============================================================
 
 
+def _existing_job_columns(
+    connection: sqlite3.Connection,
+) -> set[str]:
+    rows = connection.execute(
+        "PRAGMA table_info(jobs)"
+    ).fetchall()
+
+    return {
+        str(row["name"])
+        for row in rows
+    }
+
+
 def ensure_jobs_table(
 ) -> None:
+    """
+    Crea la tabla y migra instalaciones antiguas de Jobs sin
+    borrar ningún Job existente.
+    """
+
     with get_connection() as connection:
         connection.execute(
             """
@@ -237,12 +359,66 @@ def ensure_jobs_table(
                 expected_output TEXT NOT NULL,
                 source_uris TEXT NOT NULL,
                 requires_write INTEGER NOT NULL DEFAULT 0,
+                conversation_id TEXT,
+                study_session_id INTEGER,
+                allow_writes INTEGER NOT NULL DEFAULT 0,
+                allowed_paths TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 started_at TEXT,
                 completed_at TEXT,
                 result TEXT,
                 error TEXT
             )
+            """
+        )
+
+        columns = _existing_job_columns(
+            connection
+        )
+
+        migrations = {
+            "conversation_id": (
+                "ALTER TABLE jobs "
+                "ADD COLUMN conversation_id TEXT"
+            ),
+            "study_session_id": (
+                "ALTER TABLE jobs "
+                "ADD COLUMN study_session_id INTEGER"
+            ),
+            "allow_writes": (
+                "ALTER TABLE jobs "
+                "ADD COLUMN allow_writes INTEGER "
+                "NOT NULL DEFAULT 0"
+            ),
+            "allowed_paths": (
+                "ALTER TABLE jobs "
+                "ADD COLUMN allowed_paths TEXT "
+                "NOT NULL DEFAULT '[]'"
+            ),
+        }
+
+        for column_name, sql in (
+            migrations.items()
+        ):
+            if column_name not in columns:
+                connection.execute(
+                    sql
+                )
+
+        # Los Jobs creados antes de RuntimeContext reciben un
+        # conversation_id estable derivado de su job_id.
+        connection.execute(
+            """
+            UPDATE jobs
+            SET conversation_id =
+                'conv_legacy_' ||
+                CASE
+                    WHEN job_id LIKE 'job_%'
+                    THEN substr(job_id, 5)
+                    ELSE job_id
+                END
+            WHERE conversation_id IS NULL
+               OR trim(conversation_id) = ''
             """
         )
 
@@ -262,6 +438,14 @@ def ensure_jobs_table(
             """
         )
 
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+            idx_jobs_conversation_id
+            ON jobs(conversation_id)
+            """
+        )
+
         connection.commit()
 
 
@@ -272,8 +456,14 @@ def ensure_jobs_table(
 
 def create_job_from_handoff(
     handoff: HandoffRequest,
+    runtime_context: RuntimeContext | None = None,
 ) -> Job:
     ensure_jobs_table()
+
+    if runtime_context is None:
+        runtime_context = (
+            build_runtime_context()
+        )
 
     job_id = (
         "job_"
@@ -297,6 +487,19 @@ def create_job_from_handoff(
         )
     )
 
+    allowed_paths_json = (
+        json.dumps(
+            list(
+                runtime_context.allowed_paths
+            ),
+            ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
+        )
+    )
+
     with get_connection() as connection:
         connection.execute(
             """
@@ -309,13 +512,17 @@ def create_job_from_handoff(
                 expected_output,
                 source_uris,
                 requires_write,
+                conversation_id,
+                study_session_id,
+                allow_writes,
+                allowed_paths,
                 created_at,
                 started_at,
                 completed_at,
                 result,
                 error
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -328,6 +535,12 @@ def create_job_from_handoff(
                 1
                 if handoff.requires_write
                 else 0,
+                runtime_context.conversation_id,
+                runtime_context.study_session_id,
+                1
+                if runtime_context.allow_writes
+                else 0,
+                allowed_paths_json,
                 created_at,
                 None,
                 None,

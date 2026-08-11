@@ -15,6 +15,10 @@ from src.jobs import (
     mark_job_running,
 )
 
+from src.runtime_context import (
+    RuntimeContext,
+)
+
 
 class JobManager:
     """
@@ -24,18 +28,21 @@ class JobManager:
 
     Se encarga de:
     - crear Jobs;
+    - persistir el RuntimeContext de origen;
     - leerlos;
     - listar;
     - gestionar transiciones;
-    - mantener una API central para el futuro Worker.
+    - mantener una API central para el Worker.
     """
 
     def create_from_handoff(
         self,
         handoff: HandoffRequest,
+        runtime_context: RuntimeContext | None = None,
     ) -> Job:
         return create_job_from_handoff(
-            handoff
+            handoff,
+            runtime_context=runtime_context,
         )
 
     def get(

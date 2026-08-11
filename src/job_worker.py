@@ -16,6 +16,11 @@ from src.job_manager import (
 from src.jobs import (
     JOB_STATUS_PENDING,
     job_to_dict,
+    runtime_context_from_job,
+)
+
+from src.runtime_context import (
+    runtime_context_to_dict,
 )
 
 from src.providers import (
@@ -219,14 +224,15 @@ class JobWorker:
 
         if (
             job.requires_write
-            and not self.allow_writes
+            and not job.allow_writes
         ):
             failed_job = (
                 manager.fail(
                     job.job_id,
                     (
-                        "El Job requiere permisos "
-                        "de escritura"
+                        "El Job requiere escritura, "
+                        "pero la ejecución de origen "
+                        "no tenía permiso de escritura"
                     ),
                 )
             )
@@ -237,7 +243,40 @@ class JobWorker:
                 {
                     "ok": False,
                     "error": (
-                        "Job bloqueado por permisos"
+                        "Job bloqueado por permisos "
+                        "de origen"
+                    ),
+                    "job": (
+                        job_to_dict(
+                            failed_job
+                        )
+                    ),
+                },
+            )
+
+        if (
+            job.requires_write
+            and not self.allow_writes
+        ):
+            failed_job = (
+                manager.fail(
+                    job.job_id,
+                    (
+                        "El Job requiere escritura, "
+                        "pero el Worker no fue "
+                        "autorizado para escribir"
+                    ),
+                )
+            )
+
+            return (
+                manager,
+                failed_job,
+                {
+                    "ok": False,
+                    "error": (
+                        "Job bloqueado por permisos "
+                        "del Worker"
                     ),
                     "job": (
                         job_to_dict(
@@ -283,10 +322,21 @@ class JobWorker:
             )
         )
 
+        runtime_context = (
+            runtime_context_from_job(
+                running_job
+            )
+        )
+
         result = {
             "message": (
                 "Worker lifecycle completado "
                 "en modo básico"
+            ),
+            "runtime_context": (
+                runtime_context_to_dict(
+                    runtime_context
+                )
             ),
             "job_kind": (
                 running_job.kind
@@ -886,6 +936,12 @@ Genera la síntesis final.
             )
         )
 
+        runtime_context = (
+            runtime_context_from_job(
+                running_job
+            )
+        )
+
         try:
             if (
                 running_job.kind
@@ -937,6 +993,11 @@ Genera la síntesis final.
 
             return {
                 "ok": True,
+                "runtime_context": (
+                    runtime_context_to_dict(
+                        runtime_context
+                    )
+                ),
                 "job": (
                     job_to_dict(
                         completed_job
@@ -962,6 +1023,11 @@ Genera la síntesis final.
                 "error": (
                     str(
                         error
+                    )
+                ),
+                "runtime_context": (
+                    runtime_context_to_dict(
+                        runtime_context
                     )
                 ),
                 "job": (
