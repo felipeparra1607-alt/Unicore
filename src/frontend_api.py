@@ -15,6 +15,7 @@ from src.mcp_resources import (
 from src.runtime_context import build_runtime_context
 from src.unicore_dashboard import build_dashboard_data
 from src.unicore_agent import UniCoreAgent
+from src.unicore_client import UniCoreMCPClient
 
 HOST = "127.0.0.1"
 PORT = 8766
@@ -23,8 +24,22 @@ PORT = 8766
 class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
     def _allowed_origin(self) -> str:
         origin = self.headers.get("Origin", "")
-        if origin in {"http://127.0.0.1:5173", "http://localhost:5173"}:
-            return origin
+        try:
+            parsed_origin = urlparse(origin)
+            if (
+                parsed_origin.scheme == "http"
+                and parsed_origin.hostname in {"127.0.0.1", "localhost"}
+                and parsed_origin.username is None
+                and parsed_origin.password is None
+                and parsed_origin.port is not None
+                and 5173 <= parsed_origin.port <= 5190
+                and parsed_origin.path in {"", "/"}
+                and not parsed_origin.query
+                and not parsed_origin.fragment
+            ):
+                return origin.rstrip("/")
+        except ValueError:
+            pass
         return "http://127.0.0.1:5173"
 
     def _send_json(self, payload: dict, status_code: int = 200) -> None:
@@ -34,7 +49,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -42,7 +57,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS")
         self.end_headers()
 
     def _read_json(self) -> dict:
@@ -72,6 +87,22 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 "error": job.error,
             })
         return payload
+
+    async def _call_tool(self, name: str, arguments: dict) -> dict:
+        async with UniCoreMCPClient(transport="inprocess") as client:
+            result = await client.call_tool(name, arguments)
+
+        data = result.get("data")
+        if isinstance(data, dict) and set(data) == {"result"}:
+            data = data["result"]
+        if not result.get("ok"):
+            return {"ok": False, "error": str(data or "La operación no se pudo completar")}
+        if isinstance(data, dict):
+            return data
+        return {"ok": True, "result": data}
+
+    def _run_tool(self, name: str, arguments: dict) -> dict:
+        return asyncio.run(self._call_tool(name, arguments))
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -188,6 +219,32 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/subjects":
+                payload = self._read_json()
+                result = self._run_tool("create_subject", {
+                    "name": str(payload.get("name", "")),
+                    "academic_year": payload.get("academic_year"),
+                    "description": payload.get("description"),
+                })
+                self._send_json(result, 201 if result.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/tasks":
+                payload = self._read_json()
+                arguments = {
+                    "title": str(payload.get("title", "")),
+                    "subject_id": payload.get("subject_id"),
+                    "description": payload.get("description"),
+                    "task_type": payload.get("task_type", "other"),
+                    "priority": payload.get("priority", 3),
+                    "due_date": payload.get("due_date"),
+                    "estimated_minutes": payload.get("estimated_minutes"),
+                    "notes": payload.get("notes"),
+                }
+                result = self._run_tool("create_academic_task", arguments)
+                self._send_json(result, 201 if result.get("ok") else 400)
+                return
+
             if parsed.path == "/api/agent/message":
                 payload = self._read_json()
                 message = str(payload.get("message", "")).strip()
@@ -225,7 +282,46 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_json({"ok": False, "error": str(exc)}, 400)
         except Exception:
-            self._send_json({"ok": False, "error": "UniCore Agent no pudo completar la solicitud"}, 500)
+            self._send_json({"ok": False, "error": "La operación no se pudo completar"}, 500)
+
+    def do_PATCH(self):
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/tasks/"):
+                task_id = int(parsed.path.removeprefix("/api/tasks/").strip())
+                payload = self._read_json()
+                arguments = {"task_id": task_id}
+                for key in ("status", "progress_percentage"):
+                    if key in payload:
+                        arguments[key] = payload[key]
+                result = self._run_tool("update_academic_task", arguments)
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+            self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception:
+            self._send_json({"ok": False, "error": "No se pudo actualizar la tarea"}, 500)
+
+    def do_PUT(self):
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/grade-goal"):
+                path_parts = parsed.path.strip("/").split("/")
+                subject_id = int(path_parts[2])
+                payload = self._read_json()
+                result = self._run_tool("set_grade_goal", {
+                    "subject_id": subject_id,
+                    "target_grade": payload.get("target_grade"),
+                    "maximum_grade": payload.get("maximum_grade", 10.0),
+                })
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+            self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception:
+            self._send_json({"ok": False, "error": "No se pudo guardar el objetivo de nota"}, 500)
 
     def log_message(self, format, *args):
         return

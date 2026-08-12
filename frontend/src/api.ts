@@ -222,6 +222,24 @@ export function getTasks(subjectId?: number): Promise<TasksData> {
   return requestJson<TasksData>(`/api/tasks${params}`);
 }
 
+export type NewSubjectInput = { name: string; academic_year?: string | null; description?: string | null };
+export function createSubject(input: NewSubjectInput): Promise<{ ok: boolean; subject: { id: number; name: string; academic_year: string | null; description: string | null } }> {
+  return requestJson("/api/subjects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+}
+
+export type NewTaskInput = { title: string; subject_id?: number | null; description?: string | null; task_type: string; priority: number; due_date?: string | null; estimated_minutes?: number | null; notes?: string | null };
+export function createTask(input: NewTaskInput): Promise<{ ok: boolean; task: AcademicTask }> {
+  return requestJson("/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+}
+
+export function updateTask(taskId: number, input: { status?: string; progress_percentage?: number }): Promise<{ ok: boolean; task: AcademicTask }> {
+  return requestJson(`/api/tasks/${taskId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+}
+
+export function setGradeGoal(subjectId: number, targetGrade: number): Promise<{ ok: boolean; goal: { subject_id: number; subject_name: string; target_grade: number; maximum_grade: number } }> {
+  return requestJson(`/api/subjects/${subjectId}/grade-goal`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_grade: targetGrade, maximum_grade: 10 }) });
+}
+
 export function getStudy(subjectId: number): Promise<StudyData> {
   return requestJson<StudyData>(`/api/study?subject_id=${subjectId}`);
 }
