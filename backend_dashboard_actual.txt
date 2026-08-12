@@ -1,0 +1,6427 @@
+﻿===== dashboard_app.py =====
+import html
+import json
+from http.server import (
+    BaseHTTPRequestHandler,
+    HTTPServer,
+)
+from urllib.parse import (
+    parse_qs,
+    urlparse,
+)
+
+from src.unicore_dashboard import (
+    build_dashboard_data,
+)
+
+
+HOST = "127.0.0.1"
+PORT = 8765
+
+
+def escape(
+    value,
+) -> str:
+    """Escapa texto antes de mostrarlo en HTML."""
+
+    if value is None:
+        return ""
+
+    return html.escape(
+        str(value)
+    )
+
+
+def format_percentage(
+    value,
+    decimals: int = 0,
+    signed: bool = False,
+) -> str:
+    """
+    Formatea porcentajes.
+
+    Ejemplos:
+    80 -> 80%
+    12.3 -> +12.3%
+    None -> â€”
+    """
+
+    if value is None:
+        return "â€”"
+
+    if signed:
+        return (
+            f"{value:+.{decimals}f}%"
+        )
+
+    return (
+        f"{value:.{decimals}f}%"
+    )
+
+
+def progress_bar(
+    percentage: float | None,
+    extra_class: str = "",
+) -> str:
+    """Genera una barra visual de progreso."""
+
+    if percentage is None:
+        percentage = 0
+
+    safe_percentage = max(
+        0,
+        min(
+            float(percentage),
+            100,
+        ),
+    )
+
+    return f"""
+    <div class="progress-track {extra_class}">
+        <div
+            class="progress-fill"
+            style="width:{safe_percentage}%"
+        ></div>
+    </div>
+    """
+
+
+def risk_class(
+    level: str,
+) -> str:
+    """Convierte nivel de riesgo en clase CSS."""
+
+    mapping = {
+        "low": "risk-low",
+        "medium": "risk-medium",
+        "high": "risk-high",
+    }
+
+    return mapping.get(
+        level,
+        "risk-medium",
+    )
+
+
+def risk_label(
+    level: str,
+) -> str:
+    """Traduce nivel de riesgo."""
+
+    mapping = {
+        "low": "Bajo",
+        "medium": "Medio",
+        "high": "Alto",
+    }
+
+    return mapping.get(
+        level,
+        level,
+    )
+
+
+def trend_class(
+    value,
+    inverse: bool = False,
+) -> str:
+    """
+    Devuelve clase visual para una tendencia.
+
+    inverse=True sirve cuando una subida serÃ­a negativa.
+    """
+
+    if value is None or value == 0:
+        return "trend-neutral"
+
+    positive = value > 0
+
+    if inverse:
+        positive = not positive
+
+    return (
+        "trend-positive"
+        if positive
+        else "trend-negative"
+    )
+
+
+def render_activity_chart(
+    activity: list[dict],
+) -> str:
+    """Renderiza actividad de estudio de 7 dÃ­as."""
+
+    maximum = max(
+        [
+            item["minutes"]
+            for item in activity
+        ]
+        + [1]
+    )
+
+    bars = []
+
+    weekday_names = {
+        "Mon": "L",
+        "Tue": "M",
+        "Wed": "X",
+        "Thu": "J",
+        "Fri": "V",
+        "Sat": "S",
+        "Sun": "D",
+    }
+
+    for item in activity:
+        percentage = (
+            item["minutes"]
+            / maximum
+            * 100
+        )
+
+        weekday = weekday_names.get(
+            item["weekday"],
+            item["weekday"],
+        )
+
+        bars.append(
+            f"""
+            <div class="activity-day">
+
+                <div class="activity-value">
+                    {item["minutes"]}m
+                </div>
+
+                <div class="activity-bar-track">
+
+                    <div
+                        class="activity-bar"
+                        style="height:{percentage}%"
+                    ></div>
+
+                </div>
+
+                <div class="activity-label">
+                    {escape(weekday)}
+                </div>
+
+            </div>
+            """
+        )
+
+    return "".join(bars)
+
+
+def render_missions(
+    missions: dict,
+) -> str:
+    """Renderiza misiones del dÃ­a."""
+
+    items = missions.get(
+        "items",
+        [],
+    )
+
+    if not items:
+        return """
+        <div class="empty-state">
+            No hay misiones generadas para hoy.
+        </div>
+        """
+
+    output = []
+
+    for mission in items:
+        completed = (
+            mission["status"]
+            == "completed"
+        )
+
+        symbol = (
+            "âœ“"
+            if completed
+            else "â—‹"
+        )
+
+        progress = min(
+            100,
+            (
+                mission["current_value"]
+                / mission["target_value"]
+                * 100
+            )
+            if mission["target_value"]
+            else 0,
+        )
+
+        row_class = (
+            "mission-completed"
+            if completed
+            else ""
+        )
+
+        output.append(
+            f"""
+            <div class="mission-row {row_class}">
+
+                <div class="mission-symbol">
+                    {symbol}
+                </div>
+
+                <div class="mission-content">
+
+                    <div class="mission-title">
+                        {escape(mission["title"])}
+                    </div>
+
+                    <div class="mission-meta">
+                        {mission["current_value"]}
+                        /
+                        {mission["target_value"]}
+                    </div>
+
+                    {progress_bar(progress)}
+
+                </div>
+
+                <div class="xp-pill">
+                    +{mission["reward_xp"]} XP
+                </div>
+
+            </div>
+            """
+        )
+
+    return "".join(output)
+
+
+def render_priorities(
+    priorities: list[dict],
+) -> str:
+    """Renderiza tareas prioritarias."""
+
+    if not priorities:
+        return """
+        <div class="empty-state">
+            No hay tareas pendientes.
+        </div>
+        """
+
+    rows = []
+
+    for task in priorities:
+        days = task[
+            "days_remaining"
+        ]
+
+        if days is None:
+            deadline = "Sin fecha"
+            deadline_class = ""
+
+        elif days < 0:
+            deadline = (
+                f"Vencida hace "
+                f"{abs(days)} dÃ­a(s)"
+            )
+            deadline_class = "deadline-danger"
+
+        elif days == 0:
+            deadline = "Vence hoy"
+            deadline_class = "deadline-danger"
+
+        elif days == 1:
+            deadline = "Vence maÃ±ana"
+            deadline_class = "deadline-warning"
+
+        elif days <= 3:
+            deadline = (
+                f"Quedan {days} dÃ­as"
+            )
+            deadline_class = "deadline-warning"
+
+        else:
+            deadline = (
+                f"Quedan {days} dÃ­as"
+            )
+            deadline_class = ""
+
+        rows.append(
+            f"""
+            <div class="priority-row">
+
+                <div class="priority-main">
+
+                    <div class="priority-title">
+                        {escape(task["title"])}
+                    </div>
+
+                    <div
+                        class="
+                            priority-deadline
+                            {deadline_class}
+                        "
+                    >
+                        {escape(deadline)}
+                    </div>
+
+                </div>
+
+                <div class="priority-right">
+
+                    <div class="priority-number">
+                        P{task["priority"]}
+                    </div>
+
+                    <div class="small-progress">
+                        {task["progress_percentage"]}%
+                    </div>
+
+                </div>
+
+            </div>
+            """
+        )
+
+    return "".join(rows)
+
+
+def render_boss(
+    boss: dict | None,
+) -> str:
+    """Renderiza prÃ³ximo Boss Battle."""
+
+    if boss is None:
+        return """
+        <div class="empty-state boss-empty">
+            No hay ningÃºn Boss Battle activo.
+        </div>
+        """
+
+    readiness = boss[
+        "readiness_percentage"
+    ]
+
+    weak_topics = boss.get(
+        "weak_topics",
+        [],
+    )
+
+    weak_text = ""
+
+    if weak_topics:
+        topic_names = []
+
+        for item in weak_topics[:3]:
+            if isinstance(item, dict):
+                topic_name = item.get(
+                    "topic"
+                )
+
+                if topic_name:
+                    topic_names.append(
+                        str(topic_name)
+                    )
+
+        if topic_names:
+            weak_text = (
+                "<div class='boss-weak'>"
+                "<strong>Puntos dÃ©biles</strong><br>"
+                + escape(
+                    " Â· ".join(
+                        topic_names
+                    )
+                )
+                + "</div>"
+            )
+
+    days = boss.get(
+        "days_remaining"
+    )
+
+    if days is None:
+        day_text = "Sin fecha"
+
+    elif days < 0:
+        day_text = (
+            f"{abs(days)} dÃ­as vencido"
+        )
+
+    elif days == 0:
+        day_text = "Hoy"
+
+    elif days == 1:
+        day_text = "MaÃ±ana"
+
+    else:
+        day_text = (
+            f"{days} dÃ­as"
+        )
+
+    return f"""
+    <div class="boss-header">
+
+        <div>
+            <div class="eyebrow">
+                PRÃ“XIMO DESAFÃO
+            </div>
+
+            <div class="boss-title">
+                {escape(boss["assessment_title"])}
+            </div>
+        </div>
+
+        <div class="boss-days">
+            {escape(day_text)}
+        </div>
+
+    </div>
+
+    <div class="boss-center">
+
+        <div class="boss-percentage">
+            {readiness:.0f}%
+        </div>
+
+        <div class="boss-caption">
+            preparaciÃ³n actual
+        </div>
+
+    </div>
+
+    {progress_bar(readiness)}
+
+    {weak_text}
+
+    <div class="boss-footer">
+
+        <div>
+            Objetivo Â·
+            {boss["target_score_percentage"]:.0f}%
+        </div>
+
+        <div class="boss-reward">
+            +{boss["reward_xp"]} XP
+        </div>
+
+    </div>
+    """
+
+
+def render_subjects(
+    subjects: list[dict],
+) -> str:
+    """Renderiza tarjetas de asignaturas."""
+
+    if not subjects:
+        return """
+        <div class="empty-state">
+            No hay asignaturas.
+        </div>
+        """
+
+    cards = []
+
+    for subject in subjects:
+        quiz = (
+            f"{subject['quiz_average_percentage']:.0f}%"
+            if (
+                subject[
+                    "quiz_average_percentage"
+                ]
+                is not None
+            )
+            else "â€”"
+        )
+
+        hours = (
+            subject["study_minutes"]
+            / 60
+        )
+
+        next_assessment = (
+            subject.get(
+                "next_assessment"
+            )
+        )
+
+        if next_assessment:
+            next_text = (
+                next_assessment["title"]
+            )
+        else:
+            next_text = (
+                "Sin evaluaciÃ³n prÃ³xima"
+            )
+
+        grade = subject.get(
+            "grade",
+            {},
+        )
+
+        current_grade = grade.get(
+            "current_grade_out_of_10"
+        )
+
+        grade_text = (
+            f"{current_grade:.1f}"
+            if current_grade
+            is not None
+            else "â€”"
+        )
+
+        cards.append(
+            f"""
+            <a
+                class="subject-card"
+                href="/?subject_id={subject["id"]}"
+            >
+
+                <div class="subject-card-top">
+
+                    <div class="subject-name">
+                        {escape(subject["name"])}
+                    </div>
+
+                    <div class="subject-arrow">
+                        â†’
+                    </div>
+
+                </div>
+
+                <div class="subject-stats">
+
+                    <div>
+                        <span>
+                            {subject["xp"]}
+                        </span>
+                        XP
+                    </div>
+
+                    <div>
+                        <span>
+                            {hours:.1f}h
+                        </span>
+                        estudio
+                    </div>
+
+                    <div>
+                        <span>
+                            {quiz}
+                        </span>
+                        quiz
+                    </div>
+
+                    <div>
+                        <span>
+                            {grade_text}
+                        </span>
+                        nota
+                    </div>
+
+                </div>
+
+                <div class="subject-next">
+                    PrÃ³ximo Â·
+                    {escape(next_text)}
+                </div>
+
+            </a>
+            """
+        )
+
+    return "".join(cards)
+
+
+def render_analytics(
+    analytics: dict | None,
+) -> str:
+    """
+    Renderiza mÃ©tricas inteligentes de estudio.
+    """
+
+    if not analytics:
+        return """
+        <div class="empty-state">
+            TodavÃ­a no hay suficientes datos
+            para calcular tendencias.
+        </div>
+        """
+
+    current = analytics.get(
+        "current",
+        {},
+    )
+
+    trends = analytics.get(
+        "trends",
+        {},
+    )
+
+    efficiency = current.get(
+        "study_efficiency_index"
+    )
+
+    plan_completion = current.get(
+        "plan_completion_percentage"
+    )
+
+    average_focus = current.get(
+        "average_focus"
+    )
+
+    quiz_trend = trends.get(
+        "quiz_average_change_percentage"
+    )
+
+    study_trend = trends.get(
+        "study_minutes_change_percentage"
+    )
+
+    active_days_trend = trends.get(
+        "active_days_change_percentage"
+    )
+
+    efficiency_text = (
+        format_percentage(
+            efficiency,
+            decimals=0,
+        )
+    )
+
+    plan_text = (
+        format_percentage(
+            plan_completion,
+            decimals=0,
+        )
+    )
+
+    focus_text = (
+        f"{average_focus:.1f}/5"
+        if average_focus is not None
+        else "â€”"
+    )
+
+    quiz_trend_text = (
+        format_percentage(
+            quiz_trend,
+            decimals=1,
+            signed=True,
+        )
+    )
+
+    study_trend_text = (
+        format_percentage(
+            study_trend,
+            decimals=1,
+            signed=True,
+        )
+    )
+
+    active_days_text = (
+        format_percentage(
+            active_days_trend,
+            decimals=1,
+            signed=True,
+        )
+    )
+
+    return f"""
+    <div class="analytics-grid">
+
+        <div class="analytics-card">
+            <div class="analytics-icon">
+                âš¡
+            </div>
+
+            <div class="analytics-value">
+                {efficiency_text}
+            </div>
+
+            <div class="analytics-label">
+                Eficiencia de estudio
+            </div>
+
+            <div class="analytics-help">
+                Foco + quizzes + cumplimiento
+            </div>
+        </div>
+
+        <div class="analytics-card">
+            <div class="analytics-icon">
+                âœ“
+            </div>
+
+            <div class="analytics-value">
+                {plan_text}
+            </div>
+
+            <div class="analytics-label">
+                Cumplimiento del plan
+            </div>
+
+            <div class="analytics-help">
+                Sesiones planificadas completadas
+            </div>
+        </div>
+
+        <div class="analytics-card">
+            <div class="analytics-icon">
+                â—Ž
+            </div>
+
+            <div class="analytics-value">
+                {focus_text}
+            </div>
+
+            <div class="analytics-label">
+                Foco medio
+            </div>
+
+            <div class="analytics-help">
+                ValoraciÃ³n de las sesiones
+            </div>
+        </div>
+
+        <div class="analytics-card">
+
+            <div class="analytics-trend-label">
+                QUIZZES
+            </div>
+
+            <div
+                class="
+                    analytics-trend
+                    {trend_class(quiz_trend)}
+                "
+            >
+                {quiz_trend_text}
+            </div>
+
+            <div class="analytics-help">
+                frente al periodo anterior
+            </div>
+
+        </div>
+
+        <div class="analytics-card">
+
+            <div class="analytics-trend-label">
+                TIEMPO DE ESTUDIO
+            </div>
+
+            <div
+                class="
+                    analytics-trend
+                    {trend_class(study_trend)}
+                "
+            >
+                {study_trend_text}
+            </div>
+
+            <div class="analytics-help">
+                frente al periodo anterior
+            </div>
+
+        </div>
+
+        <div class="analytics-card">
+
+            <div class="analytics-trend-label">
+                DÃAS ACTIVOS
+            </div>
+
+            <div
+                class="
+                    analytics-trend
+                    {trend_class(active_days_trend)}
+                "
+            >
+                {active_days_text}
+            </div>
+
+            <div class="analytics-help">
+                frente al periodo anterior
+            </div>
+
+        </div>
+
+    </div>
+    """
+
+
+def render_risk(
+    risk: dict | None,
+) -> str:
+    """Renderiza panel de riesgo acadÃ©mico."""
+
+    if not risk:
+        return """
+        <div class="empty-state">
+            Selecciona una asignatura para
+            analizar sus seÃ±ales de riesgo.
+        </div>
+        """
+
+    risk_data = risk.get(
+        "risk",
+        {},
+    )
+
+    score = risk_data.get(
+        "score",
+        0,
+    )
+
+    level = risk_data.get(
+        "level",
+        "low",
+    )
+
+    css_class = risk_class(
+        level
+    )
+
+    signals = risk.get(
+        "signals",
+        [],
+    )
+
+    signal_html = []
+
+    for signal in signals[:5]:
+        points = signal.get(
+            "points",
+            0,
+        )
+
+        signal_html.append(
+            f"""
+            <div class="risk-signal">
+
+                <div class="risk-signal-dot"></div>
+
+                <div class="risk-signal-content">
+
+                    <div class="risk-signal-message">
+                        {escape(signal["message"])}
+                    </div>
+
+                    <div class="risk-signal-points">
+                        +{points} seÃ±al
+                    </div>
+
+                </div>
+
+            </div>
+            """
+        )
+
+    if not signal_html:
+        signal_html.append(
+            """
+            <div class="risk-good">
+                âœ“ No hay seÃ±ales acadÃ©micas
+                importantes en este momento.
+            </div>
+            """
+        )
+
+    return f"""
+    <div class="risk-top">
+
+        <div>
+
+            <div class="risk-score">
+                {score}
+            </div>
+
+            <div class="risk-score-caption">
+                sobre 100
+            </div>
+
+        </div>
+
+        <div
+            class="
+                risk-badge
+                {css_class}
+            "
+        >
+            Riesgo {escape(risk_label(level))}
+        </div>
+
+    </div>
+
+    {
+        progress_bar(
+            score,
+            "risk-progress"
+        )
+    }
+
+    <div class="risk-explanation">
+        Esta puntuaciÃ³n no predice tu nota.
+        Agrupa seÃ±ales que requieren atenciÃ³n.
+    </div>
+
+    <div class="risk-signals">
+        {"".join(signal_html)}
+    </div>
+    """
+
+
+def render_grade_section(
+    grade: dict | None,
+) -> str:
+    """Renderiza mÃ©tricas de nota para una asignatura."""
+
+    if not grade:
+        return ""
+
+    current_grade = grade.get(
+        "current_grade_out_of_10"
+    )
+
+    target_grade = grade.get(
+        "target_grade"
+    )
+
+    required = grade.get(
+        "required_average_on_remaining"
+    )
+
+    evaluated = grade.get(
+        "evaluated_weight_percentage"
+    )
+
+    current_text = (
+        f"{current_grade:.2f}"
+        if current_grade is not None
+        else "â€”"
+    )
+
+    target_text = (
+        f"{target_grade:.1f}"
+        if target_grade is not None
+        else "â€”"
+    )
+
+    required_text = (
+        f"{required:.2f}"
+        if required is not None
+        else "â€”"
+    )
+
+    evaluated_text = (
+        f"{evaluated:.0f}%"
+        if evaluated is not None
+        else "â€”"
+    )
+
+    return f"""
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+                <div class="eyebrow">
+                    RESULTADOS
+                </div>
+
+                <h2>
+                    SituaciÃ³n acadÃ©mica
+                </h2>
+            </div>
+
+        </div>
+
+        <div class="grade-grid">
+
+            <div class="grade-card">
+
+                <div class="grade-big">
+                    {current_text}
+                </div>
+
+                <div class="grade-label">
+                    Nota actual
+                </div>
+
+            </div>
+
+            <div class="grade-card">
+
+                <div class="grade-big">
+                    {target_text}
+                </div>
+
+                <div class="grade-label">
+                    Objetivo
+                </div>
+
+            </div>
+
+            <div class="grade-card">
+
+                <div class="grade-big">
+                    {required_text}
+                </div>
+
+                <div class="grade-label">
+                    Necesario en lo restante
+                </div>
+
+            </div>
+
+            <div class="grade-card">
+
+                <div class="grade-big">
+                    {evaluated_text}
+                </div>
+
+                <div class="grade-label">
+                    Asignatura evaluada
+                </div>
+
+            </div>
+
+        </div>
+
+    </section>
+    """
+
+
+def render_achievements(
+    achievements: list[dict],
+) -> str:
+    """Renderiza logros recientes."""
+
+    if not achievements:
+        return """
+        <div class="empty-state">
+            Tus prÃ³ximos logros aparecerÃ¡n aquÃ­.
+        </div>
+        """
+
+    output = []
+
+    for achievement in achievements:
+        output.append(
+            f"""
+            <div class="achievement">
+
+                <div class="achievement-icon">
+                    â˜…
+                </div>
+
+                <div>
+
+                    <div class="achievement-title">
+                        {escape(achievement["title"])}
+                    </div>
+
+                    <div class="achievement-description">
+                        {escape(achievement["description"])}
+                    </div>
+
+                </div>
+
+            </div>
+            """
+        )
+
+    return "".join(output)
+
+
+def render_page(
+    data: dict,
+) -> str:
+    """Construye la pÃ¡gina principal."""
+
+    hero = data[
+        "hero"
+    ]
+
+    metrics = data[
+        "metrics"
+    ]
+
+    subject = data.get(
+        "subject"
+    )
+
+    title = (
+        subject["name"]
+        if subject
+        else "Tu universidad"
+    )
+
+    view_label = (
+        "Vista de asignatura"
+        if subject
+        else "Vista global"
+    )
+
+    xp_progress = hero[
+        "level_progress_percentage"
+    ]
+
+    quiz_average = metrics[
+        "quiz_average_percentage"
+    ]
+
+    quiz_text = (
+        f"{quiz_average:.0f}%"
+        if quiz_average is not None
+        else "â€”"
+    )
+
+    week_hours = (
+        metrics[
+            "study_minutes_last_7_days"
+        ]
+        / 60
+    )
+
+    back_button = (
+        """
+        <a href="/" class="back-button">
+            â† Vista global
+        </a>
+        """
+        if subject
+        else ""
+    )
+
+    risk_panel = ""
+
+    if subject:
+        risk_panel = f"""
+        <section class="panel">
+
+            <div class="panel-header">
+                <div>
+                    <div class="eyebrow">
+                        ATENCIÃ“N ACADÃ‰MICA
+                    </div>
+
+                    <h2>
+                        Riesgo actual
+                    </h2>
+                </div>
+            </div>
+
+            {
+                render_risk(
+                    data.get(
+                        "academic_risk"
+                    )
+                )
+            }
+
+        </section>
+        """
+
+    grade_section = (
+        render_grade_section(
+            data.get(
+                "grade"
+            )
+        )
+    )
+
+    return f"""
+<!DOCTYPE html>
+
+<html lang="es">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="
+        width=device-width,
+        initial-scale=1.0
+    "
+>
+
+<title>
+    UniCore Dashboard
+</title>
+
+<style>
+
+:root {{
+    --background: #080b12;
+    --surface: #111622;
+    --surface-2: #171d2b;
+    --surface-3: #1d2434;
+
+    --border:
+        rgba(
+            255,
+            255,
+            255,
+            .08
+        );
+
+    --text: #f5f7fb;
+    --muted: #8892a6;
+
+    --accent: #8b5cf6;
+    --accent-2: #6366f1;
+
+    --green: #41d69c;
+    --red: #ff6b78;
+    --warning: #ffb454;
+}}
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+
+    background:
+        radial-gradient(
+            circle at 10% 0%,
+            rgba(
+                99,
+                102,
+                241,
+                .16
+            ),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 90% 10%,
+            rgba(
+                139,
+                92,
+                246,
+                .12
+            ),
+            transparent 28%
+        ),
+        var(--background);
+
+    color: var(--text);
+
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    min-height: 100vh;
+}}
+
+.container {{
+    width:
+        min(
+            1380px,
+            calc(
+                100% - 40px
+            )
+        );
+
+    margin: 0 auto;
+
+    padding:
+        42px 0 80px;
+}}
+
+header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+
+    margin-bottom: 34px;
+}}
+
+.brand {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}}
+
+.logo {{
+    width: 48px;
+    height: 48px;
+
+    border-radius: 15px;
+
+    display: grid;
+    place-items: center;
+
+    font-size: 20px;
+    font-weight: 900;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--accent),
+            var(--accent-2)
+        );
+
+    box-shadow:
+        0 15px 50px
+        rgba(
+            99,
+            102,
+            241,
+            .32
+        );
+}}
+
+h1 {{
+    margin: 0;
+
+    font-size: 28px;
+
+    letter-spacing: -.8px;
+}}
+
+.subtitle {{
+    color: var(--muted);
+
+    margin-top: 5px;
+
+    font-size: 14px;
+}}
+
+.view-label {{
+    margin-top: 5px;
+
+    color: #616c82;
+
+    font-size: 11px;
+
+    text-transform: uppercase;
+
+    letter-spacing: 1px;
+}}
+
+.back-button {{
+    color: var(--text);
+
+    text-decoration: none;
+
+    border:
+        1px solid
+        var(--border);
+
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .04
+        );
+
+    padding: 10px 14px;
+
+    border-radius: 12px;
+
+    font-size: 13px;
+
+    transition:
+        background .15s ease;
+}}
+
+.back-button:hover {{
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .08
+        );
+}}
+
+.hero {{
+    padding: 28px;
+
+    border:
+        1px solid
+        var(--border);
+
+    border-radius: 24px;
+
+    background:
+        linear-gradient(
+            120deg,
+            rgba(
+                139,
+                92,
+                246,
+                .14
+            ),
+            rgba(
+                17,
+                22,
+                34,
+                .9
+            )
+        );
+
+    margin-bottom: 20px;
+}}
+
+.hero-top {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    gap: 30px;
+
+    align-items: flex-end;
+}}
+
+.eyebrow {{
+    font-size: 11px;
+
+    letter-spacing: 1.6px;
+
+    color: #9ca8bf;
+
+    font-weight: 800;
+
+    margin-bottom: 8px;
+}}
+
+.hero-level {{
+    font-size: 50px;
+
+    letter-spacing: -2.5px;
+
+    font-weight: 850;
+}}
+
+.hero-xp {{
+    font-size: 18px;
+
+    font-weight: 750;
+}}
+
+.hero-next {{
+    color: var(--muted);
+
+    margin-top: 4px;
+
+    font-size: 13px;
+}}
+
+.progress-track {{
+    height: 7px;
+
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .07
+        );
+
+    border-radius: 999px;
+
+    overflow: hidden;
+
+    margin-top: 13px;
+}}
+
+.progress-fill {{
+    height: 100%;
+
+    border-radius: inherit;
+
+    background:
+        linear-gradient(
+            90deg,
+            var(--accent),
+            #a78bfa
+        );
+
+    transition:
+        width .25s ease;
+}}
+
+.metrics {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            5,
+            minmax(
+                0,
+                1fr
+            )
+        );
+
+    gap: 14px;
+
+    margin-bottom: 20px;
+}}
+
+.metric-card {{
+    padding: 20px;
+
+    border-radius: 20px;
+
+    border:
+        1px solid
+        var(--border);
+
+    background:
+        rgba(
+            17,
+            22,
+            34,
+            .92
+        );
+}}
+
+.metric-icon {{
+    font-size: 20px;
+
+    margin-bottom: 16px;
+}}
+
+.metric-value {{
+    font-size: 28px;
+
+    font-weight: 850;
+
+    letter-spacing: -1px;
+}}
+
+.metric-label {{
+    color: var(--muted);
+
+    font-size: 12px;
+
+    margin-top: 5px;
+}}
+
+.grid {{
+    display: grid;
+
+    grid-template-columns:
+        1.15fr .85fr;
+
+    gap: 20px;
+
+    margin-bottom: 20px;
+}}
+
+.grid-equal {{
+    grid-template-columns:
+        1fr 1fr;
+}}
+
+.panel {{
+    border-radius: 22px;
+
+    border:
+        1px solid
+        var(--border);
+
+    background:
+        rgba(
+            17,
+            22,
+            34,
+            .92
+        );
+
+    padding: 24px;
+}}
+
+.panel-header {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    margin-bottom: 22px;
+}}
+
+.panel h2 {{
+    margin: 0;
+
+    font-size: 19px;
+
+    letter-spacing: -.4px;
+}}
+
+.mission-row {{
+    display: flex;
+
+    gap: 13px;
+
+    align-items: center;
+
+    padding: 15px 0;
+
+    border-bottom:
+        1px solid
+        var(--border);
+}}
+
+.mission-row:last-child {{
+    border-bottom: 0;
+}}
+
+.mission-completed {{
+    opacity: .72;
+}}
+
+.mission-symbol {{
+    width: 30px;
+    height: 30px;
+
+    border-radius: 10px;
+
+    background:
+        rgba(
+            139,
+            92,
+            246,
+            .12
+        );
+
+    display: grid;
+    place-items: center;
+
+    color: #b9a2ff;
+
+    font-weight: 800;
+}}
+
+.mission-completed
+.mission-symbol {{
+    color: var(--green);
+
+    background:
+        rgba(
+            65,
+            214,
+            156,
+            .10
+        );
+}}
+
+.mission-content {{
+    flex: 1;
+}}
+
+.mission-title {{
+    font-size: 14px;
+
+    font-weight: 650;
+}}
+
+.mission-meta {{
+    color: var(--muted);
+
+    font-size: 11px;
+
+    margin-top: 4px;
+}}
+
+.xp-pill {{
+    color: #bca8ff;
+
+    font-weight: 750;
+
+    font-size: 12px;
+
+    background:
+        rgba(
+            139,
+            92,
+            246,
+            .11
+        );
+
+    padding: 6px 9px;
+
+    border-radius: 999px;
+}}
+
+.boss-header {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    gap: 20px;
+}}
+
+.boss-title {{
+    font-size: 22px;
+
+    font-weight: 800;
+}}
+
+.boss-days {{
+    font-size: 12px;
+
+    color:
+        var(--warning);
+
+    background:
+        rgba(
+            255,
+            180,
+            84,
+            .1
+        );
+
+    padding: 7px 10px;
+
+    border-radius: 999px;
+
+    height: fit-content;
+}}
+
+.boss-center {{
+    margin-top: 26px;
+}}
+
+.boss-percentage {{
+    font-size: 55px;
+
+    font-weight: 900;
+
+    letter-spacing: -3px;
+}}
+
+.boss-caption {{
+    color: var(--muted);
+
+    font-size: 12px;
+}}
+
+.boss-weak {{
+    color: var(--muted);
+
+    margin-top: 20px;
+
+    font-size: 12px;
+
+    line-height: 1.6;
+}}
+
+.boss-footer {{
+    margin-top: 18px;
+
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    color: var(--muted);
+
+    font-size: 12px;
+}}
+
+.boss-reward {{
+    color: #bca8ff;
+
+    font-weight: 750;
+}}
+
+.activity-chart {{
+    height: 210px;
+
+    display: flex;
+
+    gap: 14px;
+
+    align-items: stretch;
+}}
+
+.activity-day {{
+    flex: 1;
+
+    display: flex;
+
+    flex-direction: column;
+
+    align-items: center;
+}}
+
+.activity-value {{
+    color: var(--muted);
+
+    font-size: 10px;
+
+    height: 24px;
+}}
+
+.activity-bar-track {{
+    flex: 1;
+
+    width:
+        min(
+            32px,
+            70%
+        );
+
+    background:
+        rgba(
+            255,
+            255,
+            255,
+            .04
+        );
+
+    border-radius: 8px;
+
+    display: flex;
+
+    align-items: flex-end;
+
+    overflow: hidden;
+}}
+
+.activity-bar {{
+    width: 100%;
+
+    min-height: 2px;
+
+    background:
+        linear-gradient(
+            180deg,
+            #a78bfa,
+            #6366f1
+        );
+
+    border-radius: 8px;
+}}
+
+.activity-label {{
+    margin-top: 10px;
+
+    color: var(--muted);
+
+    font-size: 11px;
+}}
+
+.priority-row {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    align-items: center;
+
+    padding: 14px 0;
+
+    border-bottom:
+        1px solid
+        var(--border);
+}}
+
+.priority-row:last-child {{
+    border-bottom: none;
+}}
+
+.priority-main {{
+    min-width: 0;
+}}
+
+.priority-title {{
+    font-weight: 650;
+
+    font-size: 14px;
+}}
+
+.priority-deadline {{
+    color: var(--muted);
+
+    margin-top: 4px;
+
+    font-size: 11px;
+}}
+
+.deadline-danger {{
+    color: var(--red);
+}}
+
+.deadline-warning {{
+    color: var(--warning);
+}}
+
+.priority-right {{
+    text-align: right;
+
+    padding-left: 15px;
+}}
+
+.priority-number {{
+    font-size: 11px;
+
+    font-weight: 800;
+
+    color: var(--warning);
+}}
+
+.small-progress {{
+    font-size: 11px;
+
+    color: var(--muted);
+
+    margin-top: 3px;
+}}
+
+.analytics-grid {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            3,
+            minmax(
+                0,
+                1fr
+            )
+        );
+
+    gap: 12px;
+}}
+
+.analytics-card {{
+    border-radius: 16px;
+
+    background:
+        var(--surface-2);
+
+    padding: 18px;
+
+    min-height: 128px;
+}}
+
+.analytics-icon {{
+    font-size: 17px;
+
+    margin-bottom: 12px;
+}}
+
+.analytics-value {{
+    font-size: 27px;
+
+    font-weight: 850;
+
+    letter-spacing: -1px;
+}}
+
+.analytics-label {{
+    color: #c8cfdd;
+
+    font-size: 11px;
+
+    margin-top: 5px;
+
+    font-weight: 650;
+}}
+
+.analytics-help {{
+    color: var(--muted);
+
+    font-size: 10px;
+
+    margin-top: 6px;
+
+    line-height: 1.4;
+}}
+
+.analytics-trend-label {{
+    font-size: 9px;
+
+    letter-spacing: 1px;
+
+    font-weight: 800;
+
+    color: var(--muted);
+
+    margin-bottom: 12px;
+}}
+
+.analytics-trend {{
+    font-size: 26px;
+
+    font-weight: 850;
+}}
+
+.trend-positive {{
+    color: var(--green);
+}}
+
+.trend-negative {{
+    color: var(--red);
+}}
+
+.trend-neutral {{
+    color: var(--muted);
+}}
+
+.risk-top {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    align-items: flex-start;
+}}
+
+.risk-score {{
+    font-size: 50px;
+
+    font-weight: 900;
+
+    letter-spacing: -3px;
+}}
+
+.risk-score-caption {{
+    color: var(--muted);
+
+    font-size: 11px;
+}}
+
+.risk-badge {{
+    padding: 7px 10px;
+
+    border-radius: 999px;
+
+    font-size: 11px;
+
+    font-weight: 800;
+}}
+
+.risk-low {{
+    color: var(--green);
+
+    background:
+        rgba(
+            65,
+            214,
+            156,
+            .10
+        );
+}}
+
+.risk-medium {{
+    color: var(--warning);
+
+    background:
+        rgba(
+            255,
+            180,
+            84,
+            .10
+        );
+}}
+
+.risk-high {{
+    color: var(--red);
+
+    background:
+        rgba(
+            255,
+            107,
+            120,
+            .10
+        );
+}}
+
+.risk-progress
+.progress-fill {{
+    background:
+        linear-gradient(
+            90deg,
+            var(--green),
+            var(--warning),
+            var(--red)
+        );
+}}
+
+.risk-explanation {{
+    color: var(--muted);
+
+    font-size: 10px;
+
+    line-height: 1.5;
+
+    margin-top: 10px;
+}}
+
+.risk-signals {{
+    margin-top: 18px;
+}}
+
+.risk-signal {{
+    display: flex;
+
+    align-items:
+        flex-start;
+
+    gap: 10px;
+
+    padding: 10px 0;
+
+    border-bottom:
+        1px solid
+        var(--border);
+}}
+
+.risk-signal:last-child {{
+    border-bottom: 0;
+}}
+
+.risk-signal-dot {{
+    width: 7px;
+    height: 7px;
+
+    border-radius: 999px;
+
+    margin-top: 5px;
+
+    flex: 0 0 auto;
+
+    background:
+        var(--warning);
+}}
+
+.risk-signal-content {{
+    flex: 1;
+}}
+
+.risk-signal-message {{
+    color: #c8cfdd;
+
+    font-size: 12px;
+
+    line-height: 1.5;
+}}
+
+.risk-signal-points {{
+    color: var(--muted);
+
+    font-size: 9px;
+
+    margin-top: 3px;
+}}
+
+.risk-good {{
+    color: var(--green);
+
+    font-size: 12px;
+
+    line-height: 1.5;
+
+    padding-top: 10px;
+}}
+
+.grade-grid {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            1fr
+        );
+
+    gap: 14px;
+}}
+
+.grade-card {{
+    background:
+        var(--surface-2);
+
+    padding: 20px;
+
+    border-radius: 16px;
+}}
+
+.grade-big {{
+    font-size: 31px;
+
+    font-weight: 850;
+}}
+
+.grade-label {{
+    color: var(--muted);
+
+    margin-top: 5px;
+
+    font-size: 11px;
+}}
+
+.subjects-grid {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            2,
+            minmax(
+                0,
+                1fr
+            )
+        );
+
+    gap: 14px;
+}}
+
+.subject-card {{
+    text-decoration: none;
+
+    color: inherit;
+
+    padding: 20px;
+
+    border-radius: 18px;
+
+    background:
+        var(--surface-2);
+
+    border:
+        1px solid
+        transparent;
+
+    transition:
+        transform .15s ease,
+        border-color .15s ease,
+        background .15s ease;
+}}
+
+.subject-card:hover {{
+    transform:
+        translateY(-2px);
+
+    border-color:
+        rgba(
+            139,
+            92,
+            246,
+            .5
+        );
+
+    background:
+        var(--surface-3);
+}}
+
+.subject-card-top {{
+    display: flex;
+
+    justify-content:
+        space-between;
+
+    align-items: center;
+}}
+
+.subject-name {{
+    font-weight: 800;
+}}
+
+.subject-arrow {{
+    color: var(--muted);
+}}
+
+.subject-stats {{
+    display: grid;
+
+    grid-template-columns:
+        repeat(
+            4,
+            1fr
+        );
+
+    margin-top: 22px;
+
+    gap: 8px;
+
+    color: var(--muted);
+
+    font-size: 10px;
+}}
+
+.subject-stats span {{
+    display: block;
+
+    color: var(--text);
+
+    font-size: 16px;
+
+    font-weight: 800;
+
+    margin-bottom: 2px;
+}}
+
+.subject-next {{
+    margin-top: 17px;
+
+    color: var(--muted);
+
+    font-size: 11px;
+}}
+
+.achievement {{
+    display: flex;
+
+    gap: 12px;
+
+    padding: 13px 0;
+
+    border-bottom:
+        1px solid
+        var(--border);
+}}
+
+.achievement:last-child {{
+    border-bottom: 0;
+}}
+
+.achievement-icon {{
+    width: 31px;
+    height: 31px;
+
+    border-radius: 10px;
+
+    display: grid;
+
+    place-items: center;
+
+    background:
+        rgba(
+            255,
+            180,
+            84,
+            .11
+        );
+
+    color: var(--warning);
+}}
+
+.achievement-title {{
+    font-weight: 700;
+
+    font-size: 13px;
+}}
+
+.achievement-description {{
+    color: var(--muted);
+
+    font-size: 11px;
+
+    margin-top: 3px;
+}}
+
+.empty-state {{
+    color: var(--muted);
+
+    padding: 20px 0;
+
+    font-size: 13px;
+
+    line-height: 1.5;
+}}
+
+.section-margin {{
+    margin-top: 20px;
+}}
+
+footer {{
+    text-align: center;
+
+    color: #4e586d;
+
+    margin-top: 32px;
+
+    font-size: 11px;
+}}
+
+@media (
+    max-width: 1100px
+) {{
+    .analytics-grid {{
+        grid-template-columns:
+            repeat(
+                2,
+                1fr
+            );
+    }}
+
+    .grade-grid {{
+        grid-template-columns:
+            repeat(
+                2,
+                1fr
+            );
+    }}
+}}
+
+@media (
+    max-width: 950px
+) {{
+    .metrics {{
+        grid-template-columns:
+            repeat(
+                2,
+                1fr
+            );
+    }}
+
+    .grid {{
+        grid-template-columns:
+            1fr;
+    }}
+
+    .subjects-grid {{
+        grid-template-columns:
+            1fr;
+    }}
+}}
+
+@media (
+    max-width: 600px
+) {{
+    .container {{
+        width:
+            min(
+                100% - 24px,
+                1380px
+            );
+
+        padding-top: 24px;
+    }}
+
+    .metrics {{
+        grid-template-columns:
+            1fr 1fr;
+    }}
+
+    .hero-level {{
+        font-size: 39px;
+    }}
+
+    .hero-top {{
+        align-items:
+            flex-start;
+
+        flex-direction:
+            column;
+    }}
+
+    .analytics-grid {{
+        grid-template-columns:
+            1fr;
+    }}
+
+    .grade-grid {{
+        grid-template-columns:
+            1fr;
+    }}
+
+    .subject-stats {{
+        grid-template-columns:
+            1fr 1fr;
+    }}
+}}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<header>
+
+    <div class="brand">
+
+        <div class="logo">
+            U
+        </div>
+
+        <div>
+
+            <h1>
+                UniCore
+            </h1>
+
+            <div class="subtitle">
+                {escape(title)}
+            </div>
+
+            <div class="view-label">
+                {escape(view_label)}
+            </div>
+
+        </div>
+
+    </div>
+
+    {back_button}
+
+</header>
+
+
+<section class="hero">
+
+    <div class="hero-top">
+
+        <div>
+
+            <div class="eyebrow">
+                PROGRESO ACADÃ‰MICO
+            </div>
+
+            <div class="hero-level">
+                Nivel {hero["level"]}
+            </div>
+
+        </div>
+
+        <div>
+
+            <div class="hero-xp">
+                {hero["total_xp"]} XP
+            </div>
+
+            <div class="hero-next">
+                {hero["xp_until_next_level"]}
+                XP para nivel
+                {hero["level"] + 1}
+            </div>
+
+        </div>
+
+    </div>
+
+    {progress_bar(xp_progress)}
+
+</section>
+
+
+<div class="metrics">
+
+    <div class="metric-card">
+
+        <div class="metric-icon">
+            ðŸ”¥
+        </div>
+
+        <div class="metric-value">
+            {hero["current_streak"]}
+        </div>
+
+        <div class="metric-label">
+            DÃ­as de racha
+        </div>
+
+    </div>
+
+
+    <div class="metric-card">
+
+        <div class="metric-icon">
+            â±
+        </div>
+
+        <div class="metric-value">
+            {week_hours:.1f}h
+        </div>
+
+        <div class="metric-label">
+            Estudio Â· 7 dÃ­as
+        </div>
+
+    </div>
+
+
+    <div class="metric-card">
+
+        <div class="metric-icon">
+            ðŸŽ¯
+        </div>
+
+        <div class="metric-value">
+            {quiz_text}
+        </div>
+
+        <div class="metric-label">
+            Media de quizzes
+        </div>
+
+    </div>
+
+
+    <div class="metric-card">
+
+        <div class="metric-icon">
+            ðŸ“Œ
+        </div>
+
+        <div class="metric-value">
+            {metrics["pending_task_count"]}
+        </div>
+
+        <div class="metric-label">
+            Tareas pendientes
+        </div>
+
+    </div>
+
+
+    <div class="metric-card">
+
+        <div class="metric-icon">
+            ðŸ§ 
+        </div>
+
+        <div class="metric-value">
+            {metrics["due_review_count"]}
+        </div>
+
+        <div class="metric-label">
+            Repasos pendientes
+        </div>
+
+    </div>
+
+</div>
+
+
+<div class="grid">
+
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+
+                <div class="eyebrow">
+                    OBJETIVOS
+                </div>
+
+                <h2>
+                    Misiones de hoy
+                </h2>
+
+            </div>
+
+        </div>
+
+        {
+            render_missions(
+                data["missions"]
+            )
+        }
+
+    </section>
+
+
+    <section class="panel">
+
+        {
+            render_boss(
+                data["next_boss"]
+            )
+        }
+
+    </section>
+
+</div>
+
+
+<div class="grid">
+
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+
+                <div class="eyebrow">
+                    CONSTANCIA
+                </div>
+
+                <h2>
+                    Ãšltimos 7 dÃ­as
+                </h2>
+
+            </div>
+
+        </div>
+
+        <div class="activity-chart">
+
+            {
+                render_activity_chart(
+                    data["daily_activity"]
+                )
+            }
+
+        </div>
+
+    </section>
+
+
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+
+                <div class="eyebrow">
+                    AHORA
+                </div>
+
+                <h2>
+                    Prioridades
+                </h2>
+
+            </div>
+
+        </div>
+
+        {
+            render_priorities(
+                data["priorities"]
+            )
+        }
+
+    </section>
+
+</div>
+
+
+<div class="grid grid-equal">
+
+    <section class="panel">
+
+        <div class="panel-header">
+
+            <div>
+
+                <div class="eyebrow">
+                    INTELIGENCIA DE ESTUDIO
+                </div>
+
+                <h2>
+                    CÃ³mo estÃ¡s progresando
+                </h2>
+
+            </div>
+
+        </div>
+
+        {
+            render_analytics(
+                data.get(
+                    "analytics"
+                )
+            )
+        }
+
+    </section>
+
+    {risk_panel}
+
+</div>
+
+
+{grade_section}
+
+
+<section
+    class="
+        panel
+        section-margin
+    "
+>
+
+    <div class="panel-header">
+
+        <div>
+
+            <div class="eyebrow">
+                MAPA ACADÃ‰MICO
+            </div>
+
+            <h2>
+                Asignaturas
+            </h2>
+
+        </div>
+
+    </div>
+
+    <div class="subjects-grid">
+
+        {
+            render_subjects(
+                data["subjects"]
+            )
+        }
+
+    </div>
+
+</section>
+
+
+<section
+    class="
+        panel
+        section-margin
+    "
+>
+
+    <div class="panel-header">
+
+        <div>
+
+            <div class="eyebrow">
+                TROFEOS
+            </div>
+
+            <h2>
+                Logros recientes
+            </h2>
+
+        </div>
+
+    </div>
+
+    {
+        render_achievements(
+            data["achievements"]
+        )
+    }
+
+</section>
+
+
+<footer>
+    UniCore Â· datos locales Â·
+    coste IA del dashboard: 0 â‚¬
+</footer>
+
+</div>
+
+</body>
+
+</html>
+"""
+
+
+class DashboardHandler(
+    BaseHTTPRequestHandler,
+):
+    """Servidor HTTP del dashboard."""
+
+    def do_GET(self):
+        parsed = urlparse(
+            self.path
+        )
+
+        query = parse_qs(
+            parsed.query
+        )
+
+        subject_value = query.get(
+            "subject_id",
+            [None],
+        )[0]
+
+        try:
+            subject_id = (
+                int(subject_value)
+                if subject_value
+                else None
+            )
+
+        except ValueError:
+            subject_id = None
+
+        data = build_dashboard_data(
+            subject_id=subject_id
+        )
+
+        if parsed.path == "/api/dashboard":
+            body = json.dumps(
+                data,
+                ensure_ascii=False,
+                indent=2,
+            ).encode(
+                "utf-8"
+            )
+
+            status_code = (
+                200
+                if data.get("ok")
+                else 400
+            )
+
+            self.send_response(
+                status_code
+            )
+
+            self.send_header(
+                "Content-Type",
+                (
+                    "application/json; "
+                    "charset=utf-8"
+                ),
+            )
+
+            self.send_header(
+                "Content-Length",
+                str(len(body)),
+            )
+
+            self.end_headers()
+
+            self.wfile.write(
+                body
+            )
+
+            return
+
+        if not data.get("ok"):
+            body = (
+                "<h1>Error</h1>"
+                f"<p>"
+                f"{escape(data.get('error'))}"
+                f"</p>"
+            ).encode(
+                "utf-8"
+            )
+
+            self.send_response(
+                400
+            )
+
+        else:
+            body = render_page(
+                data
+            ).encode(
+                "utf-8"
+            )
+
+            self.send_response(
+                200
+            )
+
+        self.send_header(
+            "Content-Type",
+            (
+                "text/html; "
+                "charset=utf-8"
+            ),
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(body)),
+        )
+
+        self.end_headers()
+
+        self.wfile.write(
+            body
+        )
+
+    def log_message(
+        self,
+        format,
+        *args,
+    ):
+        return
+
+
+def main() -> None:
+    """Inicia el dashboard local."""
+
+    server = HTTPServer(
+        (
+            HOST,
+            PORT,
+        ),
+        DashboardHandler,
+    )
+
+    print()
+    print(
+        "UniCore Dashboard"
+    )
+
+    print(
+        "================="
+    )
+
+    print()
+
+    print(
+        f"Abre: http://{HOST}:{PORT}"
+    )
+
+    print()
+
+    print(
+        "Ctrl + C para detener."
+    )
+
+    print()
+
+    try:
+        server.serve_forever()
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        server.server_close()
+
+        print()
+
+        print(
+            "Dashboard detenido."
+        )
+
+
+if __name__ == "__main__":
+    main()
+===== dashboard_tools.py =====
+import json
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import func, select
+
+from src.database.connection import SessionLocal
+from src.database.models import (
+    ClassSession,
+    ReviewItem,
+    StudyAttempt,
+    Subject,
+)
+
+
+def datetime_to_text(
+    value: datetime | None,
+) -> str | None:
+    """Convierte una fecha y hora en texto ISO."""
+
+    return value.isoformat() if value else None
+
+
+def class_session_summary(
+    class_session: ClassSession | None,
+) -> dict[str, Any] | None:
+    """Resume una sesiÃ³n de clase."""
+
+    if class_session is None:
+        return None
+
+    return {
+        "id": class_session.id,
+        "title": class_session.title,
+        "class_date": (
+            class_session.class_date.isoformat()
+            if class_session.class_date
+            else None
+        ),
+        "start_time": class_session.start_time,
+        "session_type": class_session.session_type,
+        "attended": class_session.attended,
+        "topics": class_session.topics,
+        "summary": class_session.summary,
+        "doubts": class_session.doubts,
+        "tasks": class_session.tasks,
+    }
+
+
+def attempt_summary(
+    attempt: StudyAttempt,
+) -> dict[str, Any]:
+    """Resume un intento de estudio."""
+
+    return {
+        "id": attempt.id,
+        "topic": attempt.topic,
+        "study_mode": attempt.study_mode,
+        "difficulty": attempt.difficulty,
+        "total_questions": attempt.total_questions,
+        "correct_answers": attempt.correct_answers,
+        "score_percentage": attempt.score_percentage,
+        "status": attempt.status,
+        "started_at": datetime_to_text(
+            attempt.started_at
+        ),
+        "completed_at": datetime_to_text(
+            attempt.completed_at
+        ),
+    }
+
+
+def review_summary(
+    item: ReviewItem,
+) -> dict[str, Any]:
+    """Resume un elemento de repaso."""
+
+    return {
+        "id": item.id,
+        "topic": item.topic,
+        "question": item.question,
+        "correct_answer": item.correct_answer,
+        "status": item.status,
+        "priority": item.priority,
+        "correct_streak": item.correct_streak,
+        "incorrect_count": item.incorrect_count,
+        "interval_days": item.interval_days,
+        "next_review_at": datetime_to_text(
+            item.next_review_at
+        ),
+    }
+
+
+def collect_weak_topics(
+    attempts: list[StudyAttempt],
+    maximum_results: int = 10,
+) -> list[dict[str, Any]]:
+    """Recopila las preguntas falladas mÃ¡s recientes."""
+
+    weak_topics = []
+
+    for attempt in attempts:
+        if not attempt.results_json:
+            continue
+
+        try:
+            results = json.loads(
+                attempt.results_json
+            )
+        except json.JSONDecodeError:
+            continue
+
+        for question in results.get(
+            "weak_topics",
+            [],
+        ):
+            weak_topics.append({
+                "attempt_id": attempt.id,
+                "topic": attempt.topic,
+                "question": question,
+                "completed_at": datetime_to_text(
+                    attempt.completed_at
+                ),
+            })
+
+            if len(weak_topics) >= maximum_results:
+                return weak_topics
+
+    return weak_topics
+
+
+def register_dashboard_tools(mcp) -> None:
+    """Registra las herramientas del panel acadÃ©mico."""
+
+    @mcp.tool()
+    def get_subject_dashboard(
+        subject_id: int,
+        recent_attempt_limit: int = 5,
+        weak_topic_limit: int = 10,
+    ) -> dict:
+        """
+        Devuelve una visiÃ³n general de una asignatura.
+
+        Incluye clases, puntuaciones, errores y repasos.
+        """
+
+        if (
+            recent_attempt_limit < 1
+            or recent_attempt_limit > 50
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "recent_attempt_limit debe estar "
+                    "entre 1 y 50"
+                ),
+            }
+
+        if (
+            weak_topic_limit < 1
+            or weak_topic_limit > 50
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "weak_topic_limit debe estar "
+                    "entre 1 y 50"
+                ),
+            }
+
+        now = datetime.utcnow()
+
+        with SessionLocal() as session:
+            subject = session.get(
+                Subject,
+                subject_id,
+            )
+
+            if subject is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "La asignatura no existe"
+                    ),
+                }
+
+            completed_attempts = session.scalars(
+                select(StudyAttempt)
+                .where(
+                    StudyAttempt.subject_id
+                    == subject_id,
+                    StudyAttempt.status
+                    == "completed",
+                )
+                .order_by(
+                    StudyAttempt.completed_at.desc(),
+                    StudyAttempt.id.desc(),
+                )
+            ).all()
+
+            pending_attempts = session.scalars(
+                select(StudyAttempt)
+                .where(
+                    StudyAttempt.subject_id
+                    == subject_id,
+                    StudyAttempt.status
+                    == "pending",
+                )
+                .order_by(
+                    StudyAttempt.started_at.desc(),
+                    StudyAttempt.id.desc(),
+                )
+            ).all()
+
+            latest_class = session.scalar(
+                select(ClassSession)
+                .where(
+                    ClassSession.subject_id
+                    == subject_id
+                )
+                .order_by(
+                    ClassSession.class_date.desc(),
+                    ClassSession.start_time.desc(),
+                    ClassSession.id.desc(),
+                )
+                .limit(1)
+            )
+
+            total_classes = session.scalar(
+                select(
+                    func.count(
+                        ClassSession.id
+                    )
+                ).where(
+                    ClassSession.subject_id
+                    == subject_id
+                )
+            ) or 0
+
+            attended_classes = session.scalar(
+                select(
+                    func.count(
+                        ClassSession.id
+                    )
+                ).where(
+                    ClassSession.subject_id
+                    == subject_id,
+                    ClassSession.attended.is_(True),
+                )
+            ) or 0
+
+            all_review_items = session.scalars(
+                select(ReviewItem)
+                .where(
+                    ReviewItem.subject_id
+                    == subject_id
+                )
+                .order_by(
+                    ReviewItem.priority.desc(),
+                    ReviewItem.next_review_at.asc(),
+                )
+            ).all()
+
+            due_review_items = [
+                item
+                for item in all_review_items
+                if (
+                    item.status != "mastered"
+                    and item.next_review_at <= now
+                )
+            ]
+
+            upcoming_review_items = [
+                item
+                for item in all_review_items
+                if (
+                    item.status != "mastered"
+                    and item.next_review_at > now
+                )
+            ]
+
+            mastered_review_items = [
+                item
+                for item in all_review_items
+                if item.status == "mastered"
+            ]
+
+            total_questions = sum(
+                attempt.total_questions
+                for attempt in completed_attempts
+            )
+
+            total_correct = sum(
+                attempt.correct_answers or 0
+                for attempt in completed_attempts
+            )
+
+            overall_score = (
+                round(
+                    total_correct
+                    / total_questions
+                    * 100,
+                    2,
+                )
+                if total_questions > 0
+                else None
+            )
+
+            average_attempt_score = (
+                round(
+                    sum(
+                        attempt.score_percentage or 0
+                        for attempt in completed_attempts
+                    )
+                    / len(completed_attempts),
+                    2,
+                )
+                if completed_attempts
+                else None
+            )
+
+            attendance_percentage = (
+                round(
+                    attended_classes
+                    / total_classes
+                    * 100,
+                    2,
+                )
+                if total_classes > 0
+                else None
+            )
+
+            weak_topics = collect_weak_topics(
+                attempts=completed_attempts,
+                maximum_results=weak_topic_limit,
+            )
+
+            if due_review_items:
+                recommended_action = (
+                    "Completa primero los repasos pendientes."
+                )
+            elif pending_attempts:
+                recommended_action = (
+                    "Termina el quiz que todavÃ­a estÃ¡ pendiente."
+                )
+            elif weak_topics:
+                recommended_action = (
+                    "Genera un nuevo quiz sobre tus puntos dÃ©biles."
+                )
+            elif completed_attempts:
+                recommended_action = (
+                    "ContinÃºa con un tema nuevo o realiza "
+                    "un repaso general."
+                )
+            else:
+                recommended_action = (
+                    "Genera tu primer material de estudio."
+                )
+
+            return {
+                "ok": True,
+                "generated_at": now.isoformat(),
+                "subject": {
+                    "id": subject.id,
+                    "name": subject.name,
+                    "academic_year": (
+                        subject.academic_year
+                    ),
+                    "description": (
+                        subject.description
+                    ),
+                },
+                "classes": {
+                    "total": total_classes,
+                    "attended": attended_classes,
+                    "attendance_percentage": (
+                        attendance_percentage
+                    ),
+                    "latest_class": (
+                        class_session_summary(
+                            latest_class
+                        )
+                    ),
+                },
+                "study_progress": {
+                    "completed_attempts": len(
+                        completed_attempts
+                    ),
+                    "pending_attempts": len(
+                        pending_attempts
+                    ),
+                    "total_questions": (
+                        total_questions
+                    ),
+                    "total_correct": total_correct,
+                    "overall_score_percentage": (
+                        overall_score
+                    ),
+                    "average_attempt_score": (
+                        average_attempt_score
+                    ),
+                    "recent_attempts": [
+                        attempt_summary(
+                            attempt
+                        )
+                        for attempt
+                        in completed_attempts[
+                            :recent_attempt_limit
+                        ]
+                    ],
+                },
+                "reviews": {
+                    "total": len(
+                        all_review_items
+                    ),
+                    "due_now": len(
+                        due_review_items
+                    ),
+                    "upcoming": len(
+                        upcoming_review_items
+                    ),
+                    "mastered": len(
+                        mastered_review_items
+                    ),
+                    "due_items": [
+                        review_summary(item)
+                        for item
+                        in due_review_items[:10]
+                    ],
+                    "next_upcoming_item": (
+                        review_summary(
+                            upcoming_review_items[0]
+                        )
+                        if upcoming_review_items
+                        else None
+                    ),
+                },
+                "weak_topics": weak_topics,
+                "recommended_action": (
+                    recommended_action
+                ),
+            }
+
+    @mcp.tool()
+    def get_daily_study_plan(
+        subject_id: int,
+        available_minutes: int = 30,
+        maximum_review_items: int = 10,
+    ) -> dict:
+        """
+        Crea un plan de estudio local para la sesiÃ³n actual.
+
+        No llama a ningÃºn modelo.
+        """
+
+        if (
+            available_minutes < 5
+            or available_minutes > 480
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "available_minutes debe estar "
+                    "entre 5 y 480"
+                ),
+            }
+
+        if (
+            maximum_review_items < 1
+            or maximum_review_items > 50
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "maximum_review_items debe estar "
+                    "entre 1 y 50"
+                ),
+            }
+
+        now = datetime.utcnow()
+
+        with SessionLocal() as session:
+            subject = session.get(
+                Subject,
+                subject_id,
+            )
+
+            if subject is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "La asignatura no existe"
+                    ),
+                }
+
+            due_reviews = session.scalars(
+                select(ReviewItem)
+                .where(
+                    ReviewItem.subject_id
+                    == subject_id,
+                    ReviewItem.status
+                    != "mastered",
+                    ReviewItem.next_review_at
+                    <= now,
+                )
+                .order_by(
+                    ReviewItem.priority.desc(),
+                    ReviewItem.next_review_at.asc(),
+                )
+                .limit(maximum_review_items)
+            ).all()
+
+            pending_attempts = session.scalars(
+                select(StudyAttempt)
+                .where(
+                    StudyAttempt.subject_id
+                    == subject_id,
+                    StudyAttempt.status
+                    == "pending",
+                )
+                .order_by(
+                    StudyAttempt.started_at.asc()
+                )
+            ).all()
+
+            completed_attempts = session.scalars(
+                select(StudyAttempt)
+                .where(
+                    StudyAttempt.subject_id
+                    == subject_id,
+                    StudyAttempt.status
+                    == "completed",
+                )
+                .order_by(
+                    StudyAttempt.completed_at.desc()
+                )
+            ).all()
+
+            weak_topics = collect_weak_topics(
+                attempts=completed_attempts,
+                maximum_results=5,
+            )
+
+            remaining_minutes = (
+                available_minutes
+            )
+
+            plan_steps = []
+
+            if due_reviews and remaining_minutes >= 5:
+                review_minutes = min(
+                    remaining_minutes,
+                    max(
+                        5,
+                        len(due_reviews) * 3,
+                    ),
+                )
+
+                plan_steps.append({
+                    "order": len(plan_steps) + 1,
+                    "action": "review_due_items",
+                    "title": (
+                        "Repasar errores pendientes"
+                    ),
+                    "minutes": review_minutes,
+                    "item_count": len(
+                        due_reviews
+                    ),
+                    "items": [
+                        review_summary(item)
+                        for item in due_reviews
+                    ],
+                })
+
+                remaining_minutes -= review_minutes
+
+            if (
+                pending_attempts
+                and remaining_minutes >= 5
+            ):
+                quiz_minutes = min(
+                    remaining_minutes,
+                    10,
+                )
+
+                plan_steps.append({
+                    "order": len(plan_steps) + 1,
+                    "action": (
+                        "complete_pending_quiz"
+                    ),
+                    "title": (
+                        "Terminar el quiz pendiente"
+                    ),
+                    "minutes": quiz_minutes,
+                    "attempt": attempt_summary(
+                        pending_attempts[0]
+                    ),
+                })
+
+                remaining_minutes -= quiz_minutes
+
+            if (
+                weak_topics
+                and remaining_minutes >= 10
+            ):
+                weak_topic_minutes = min(
+                    remaining_minutes,
+                    15,
+                )
+
+                plan_steps.append({
+                    "order": len(plan_steps) + 1,
+                    "action": (
+                        "study_weak_topics"
+                    ),
+                    "title": (
+                        "Revisar puntos dÃ©biles"
+                    ),
+                    "minutes": weak_topic_minutes,
+                    "topics": weak_topics[:3],
+                })
+
+                remaining_minutes -= (
+                    weak_topic_minutes
+                )
+
+            if remaining_minutes >= 5:
+                plan_steps.append({
+                    "order": len(plan_steps) + 1,
+                    "action": "new_study_material",
+                    "title": (
+                        "Estudiar o practicar un tema nuevo"
+                    ),
+                    "minutes": remaining_minutes,
+                    "suggested_modes": [
+                        "quick_review",
+                        "quiz",
+                        "flashcards",
+                    ],
+                })
+
+                remaining_minutes = 0
+
+            if not plan_steps:
+                plan_steps.append({
+                    "order": 1,
+                    "action": "quick_review",
+                    "title": "Realizar un repaso breve",
+                    "minutes": available_minutes,
+                })
+
+            return {
+                "ok": True,
+                "generated_at": now.isoformat(),
+                "subject": {
+                    "id": subject.id,
+                    "name": subject.name,
+                },
+                "available_minutes": (
+                    available_minutes
+                ),
+                "planned_minutes": sum(
+                    step["minutes"]
+                    for step in plan_steps
+                ),
+                "due_review_count": len(
+                    due_reviews
+                ),
+                "pending_attempt_count": len(
+                    pending_attempts
+                ),
+                "weak_topic_count": len(
+                    weak_topics
+                ),
+                "steps": plan_steps,
+                "provider_called": False,
+                "estimated_cost_usd": 0,
+            }
+===== unicore_dashboard.py =====
+import json
+from datetime import date, datetime, timedelta
+
+from sqlalchemy import select
+
+from src.academic_risk_tools import (
+    build_subject_risk,
+)
+from src.analytics_tools import (
+    build_learning_analytics,
+)
+from src.database.connection import SessionLocal
+from src.database.models import (
+    AcademicTask,
+    AchievementUnlock,
+    Assessment,
+    BossBattle,
+    DailyMission,
+    GamificationEvent,
+    GradeGoal,
+    ReviewItem,
+    StudyAttempt,
+    StudySession,
+    Subject,
+)
+from src.gamification_tools import (
+    calculate_level,
+    calculate_streak,
+)
+
+
+def safe_json_list(
+    value: str | None,
+) -> list:
+    if not value:
+        return []
+
+    try:
+        result = json.loads(value)
+
+        if isinstance(result, list):
+            return result
+
+    except json.JSONDecodeError:
+        pass
+
+    return []
+
+
+def calculate_grade_snapshot(
+    assessments: list[Assessment],
+    goal: GradeGoal | None,
+) -> dict:
+    active = [
+        item
+        for item in assessments
+        if item.status != "cancelled"
+    ]
+
+    completed = [
+        item
+        for item in active
+        if (
+            item.status == "completed"
+            and item.obtained_grade is not None
+        )
+    ]
+
+    total_weight = sum(
+        item.weight_percentage
+        for item in active
+    )
+
+    evaluated_weight = sum(
+        item.weight_percentage
+        for item in completed
+    )
+
+    accumulated_percentage = sum(
+        (
+            item.obtained_grade
+            / item.maximum_grade
+        )
+        * item.weight_percentage
+        for item in completed
+    )
+
+    current_grade = (
+        accumulated_percentage
+        / evaluated_weight
+        * 10
+        if evaluated_weight > 0
+        else None
+    )
+
+    target_grade = (
+        goal.target_grade
+        if goal
+        else None
+    )
+
+    required_average = None
+
+    if goal and evaluated_weight < 100:
+        target_percentage = (
+            goal.target_grade
+            / goal.maximum_grade
+            * 100
+        )
+
+        required_percentage = (
+            target_percentage
+            - accumulated_percentage
+        )
+
+        remaining_weight = (
+            100 - evaluated_weight
+        )
+
+        if required_percentage <= 0:
+            required_average = 0.0
+
+        elif remaining_weight > 0:
+            required_average = (
+                required_percentage
+                / remaining_weight
+                * goal.maximum_grade
+            )
+
+    return {
+        "current_grade_out_of_10": (
+            round(current_grade, 2)
+            if current_grade is not None
+            else None
+        ),
+        "evaluated_weight_percentage": round(
+            evaluated_weight,
+            2,
+        ),
+        "defined_weight_percentage": round(
+            total_weight,
+            2,
+        ),
+        "accumulated_final_percentage": round(
+            accumulated_percentage,
+            2,
+        ),
+        "target_grade": target_grade,
+        "required_average_on_remaining": (
+            round(required_average, 2)
+            if required_average is not None
+            else None
+        ),
+    }
+
+
+def build_dashboard_data(
+    subject_id: int | None = None,
+) -> dict:
+    """
+    Construye el estado completo del dashboard.
+
+    No llama a ningÃºn proveedor de IA.
+    """
+
+    today = date.today()
+    week_start = today - timedelta(days=6)
+
+    with SessionLocal() as session:
+        selected_subject = None
+
+        if subject_id is not None:
+            selected_subject = session.get(
+                Subject,
+                subject_id,
+            )
+
+            if selected_subject is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "La asignatura no existe"
+                    ),
+                }
+
+        subjects = session.scalars(
+            select(Subject).order_by(
+                Subject.name.asc()
+            )
+        ).all()
+
+        study_statement = select(
+            StudySession
+        )
+
+        attempt_statement = select(
+            StudyAttempt
+        ).where(
+            StudyAttempt.status
+            == "completed"
+        )
+
+        task_statement = select(
+            AcademicTask
+        ).where(
+            AcademicTask.status.notin_(
+                ["completed", "cancelled"]
+            )
+        )
+
+        review_statement = select(
+            ReviewItem
+        )
+
+        event_statement = select(
+            GamificationEvent
+        )
+
+        mission_statement = select(
+            DailyMission
+        ).where(
+            DailyMission.mission_date
+            == today
+        )
+
+        boss_statement = select(
+            BossBattle
+        )
+
+        achievement_statement = select(
+            AchievementUnlock
+        )
+
+        assessment_statement = select(
+            Assessment
+        )
+
+        if subject_id is not None:
+            study_statement = (
+                study_statement.where(
+                    StudySession.subject_id
+                    == subject_id
+                )
+            )
+
+            attempt_statement = (
+                attempt_statement.where(
+                    StudyAttempt.subject_id
+                    == subject_id
+                )
+            )
+
+            task_statement = (
+                task_statement.where(
+                    AcademicTask.subject_id
+                    == subject_id
+                )
+            )
+
+            review_statement = (
+                review_statement.where(
+                    ReviewItem.subject_id
+                    == subject_id
+                )
+            )
+
+            event_statement = (
+                event_statement.where(
+                    GamificationEvent.subject_id
+                    == subject_id
+                )
+            )
+
+            mission_statement = (
+                mission_statement.where(
+                    DailyMission.subject_id
+                    == subject_id
+                )
+            )
+
+            boss_statement = (
+                boss_statement.where(
+                    BossBattle.subject_id
+                    == subject_id
+                )
+            )
+
+            achievement_statement = (
+                achievement_statement.where(
+                    AchievementUnlock.subject_id
+                    == subject_id
+                )
+            )
+
+            assessment_statement = (
+                assessment_statement.where(
+                    Assessment.subject_id
+                    == subject_id
+                )
+            )
+
+        study_sessions = session.scalars(
+            study_statement
+        ).all()
+
+        attempts = session.scalars(
+            attempt_statement
+        ).all()
+
+        pending_tasks = session.scalars(
+            task_statement
+        ).all()
+
+        review_items = session.scalars(
+            review_statement
+        ).all()
+
+        xp_events = session.scalars(
+            event_statement
+        ).all()
+
+        missions = session.scalars(
+            mission_statement.order_by(
+                DailyMission.status.asc(),
+                DailyMission.reward_xp.desc(),
+            )
+        ).all()
+
+        bosses = session.scalars(
+            boss_statement
+        ).all()
+
+        achievements = session.scalars(
+            achievement_statement.order_by(
+                AchievementUnlock.unlocked_at.desc()
+            )
+        ).all()
+
+        assessments = session.scalars(
+            assessment_statement
+        ).all()
+
+        total_xp = sum(
+            item.xp_points
+            for item in xp_events
+        )
+
+        level = calculate_level(
+            total_xp
+        )
+
+        streak = calculate_streak(
+            [
+                item.session_date
+                for item in study_sessions
+            ]
+        )
+
+        study_minutes_week = sum(
+            item.duration_minutes
+            for item in study_sessions
+            if (
+                week_start
+                <= item.session_date
+                <= today
+            )
+        )
+
+        study_minutes_today = sum(
+            item.duration_minutes
+            for item in study_sessions
+            if item.session_date == today
+        )
+
+        quiz_scores = [
+            item.score_percentage
+            for item in attempts
+            if item.score_percentage
+            is not None
+        ]
+
+        quiz_average = (
+            sum(quiz_scores)
+            / len(quiz_scores)
+            if quiz_scores
+            else None
+        )
+
+        due_reviews = [
+            item
+            for item in review_items
+            if (
+                item.status != "mastered"
+                and item.next_review_at
+                <= datetime.utcnow()
+            )
+        ]
+
+        overdue_tasks = [
+            item
+            for item in pending_tasks
+            if (
+                item.due_date is not None
+                and item.due_date < today
+            )
+        ]
+
+        urgent_tasks = sorted(
+            pending_tasks,
+            key=lambda item: (
+                item.due_date is None,
+                item.due_date or date.max,
+                -item.priority,
+            ),
+        )
+
+        daily_activity = []
+
+        for day_offset in range(6, -1, -1):
+            current_day = (
+                today
+                - timedelta(
+                    days=day_offset
+                )
+            )
+
+            minutes = sum(
+                item.duration_minutes
+                for item in study_sessions
+                if (
+                    item.session_date
+                    == current_day
+                )
+            )
+
+            daily_activity.append({
+                "date": (
+                    current_day.isoformat()
+                ),
+                "weekday": (
+                    current_day.strftime(
+                        "%a"
+                    )
+                ),
+                "minutes": minutes,
+            })
+
+        upcoming_assessments = [
+            item
+            for item in assessments
+            if (
+                item.status == "pending"
+                and item.assessment_date
+                is not None
+                and item.assessment_date
+                >= today
+            )
+        ]
+
+        upcoming_assessments.sort(
+            key=lambda item: (
+                item.assessment_date
+            )
+        )
+
+        next_assessment = (
+            upcoming_assessments[0]
+            if upcoming_assessments
+            else None
+        )
+
+        active_bosses = [
+            item
+            for item in bosses
+            if item.status != "defeated"
+        ]
+
+        def boss_sort_key(
+            boss: BossBattle,
+        ):
+            assessment = session.get(
+                Assessment,
+                boss.assessment_id,
+            )
+
+            return (
+                assessment.assessment_date
+                if (
+                    assessment
+                    and assessment.assessment_date
+                )
+                else date.max
+            )
+
+        active_bosses.sort(
+            key=boss_sort_key
+        )
+
+        next_boss = None
+
+        if active_bosses:
+            boss = active_bosses[0]
+
+            boss_assessment = session.get(
+                Assessment,
+                boss.assessment_id,
+            )
+
+            next_boss = {
+                "id": boss.id,
+                "title": boss.title,
+                "assessment_title": (
+                    boss_assessment.title
+                    if boss_assessment
+                    else None
+                ),
+                "assessment_date": (
+                    boss_assessment.assessment_date
+                    .isoformat()
+                    if (
+                        boss_assessment
+                        and boss_assessment.assessment_date
+                    )
+                    else None
+                ),
+                "days_remaining": (
+                    (
+                        boss_assessment.assessment_date
+                        - today
+                    ).days
+                    if (
+                        boss_assessment
+                        and boss_assessment.assessment_date
+                    )
+                    else None
+                ),
+                "readiness_percentage": (
+                    boss.readiness_percentage
+                ),
+                "target_score_percentage": (
+                    boss.target_score_percentage
+                ),
+                "reward_xp": boss.reward_xp,
+                "weak_topics": safe_json_list(
+                    boss.weak_topics_json
+                ),
+                "recommended_actions": (
+                    safe_json_list(
+                        boss.recommended_actions_json
+                    )
+                ),
+            }
+
+        goal_statement = select(
+            GradeGoal
+        )
+
+        if subject_id is not None:
+            goal_statement = (
+                goal_statement.where(
+                    GradeGoal.subject_id
+                    == subject_id
+                )
+            )
+
+        goals = session.scalars(
+            goal_statement
+        ).all()
+
+        goals_by_subject = {
+            item.subject_id: item
+            for item in goals
+        }
+
+        if subject_id is not None:
+            grade_snapshot = (
+                calculate_grade_snapshot(
+                    assessments,
+                    goals_by_subject.get(
+                        subject_id
+                    ),
+                )
+            )
+        else:
+            grade_snapshot = None
+
+        subject_cards = []
+
+        for subject in subjects:
+            subject_sessions = [
+                item
+                for item in study_sessions
+                if item.subject_id
+                == subject.id
+            ]
+
+            if (
+                subject_id is not None
+                and subject.id
+                != subject_id
+            ):
+                continue
+
+            subject_events = [
+                item
+                for item in xp_events
+                if item.subject_id
+                == subject.id
+            ]
+
+            subject_attempts = [
+                item
+                for item in attempts
+                if item.subject_id
+                == subject.id
+            ]
+
+            subject_tasks = [
+                item
+                for item in pending_tasks
+                if item.subject_id
+                == subject.id
+            ]
+
+            subject_assessments = [
+                item
+                for item in assessments
+                if item.subject_id
+                == subject.id
+            ]
+
+            subject_quiz_scores = [
+                item.score_percentage
+                for item in subject_attempts
+                if item.score_percentage
+                is not None
+            ]
+
+            subject_quiz_average = (
+                sum(subject_quiz_scores)
+                / len(subject_quiz_scores)
+                if subject_quiz_scores
+                else None
+            )
+
+            future_assessments = [
+                item
+                for item
+                in subject_assessments
+                if (
+                    item.status == "pending"
+                    and item.assessment_date
+                    is not None
+                    and item.assessment_date
+                    >= today
+                )
+            ]
+
+            future_assessments.sort(
+                key=lambda item: (
+                    item.assessment_date
+                )
+            )
+
+            subject_cards.append({
+                "id": subject.id,
+                "name": subject.name,
+                "xp": sum(
+                    item.xp_points
+                    for item in subject_events
+                ),
+                "study_minutes": sum(
+                    item.duration_minutes
+                    for item in subject_sessions
+                ),
+                "quiz_average_percentage": (
+                    round(
+                        subject_quiz_average,
+                        2,
+                    )
+                    if subject_quiz_average
+                    is not None
+                    else None
+                ),
+                "pending_task_count": len(
+                    subject_tasks
+                ),
+                "next_assessment": (
+                    {
+                        "title": (
+                            future_assessments[
+                                0
+                            ].title
+                        ),
+                        "date": (
+                            future_assessments[
+                                0
+                            ].assessment_date
+                            .isoformat()
+                        ),
+                    }
+                    if future_assessments
+                    else None
+                ),
+                "grade": (
+                    calculate_grade_snapshot(
+                        subject_assessments,
+                        goals_by_subject.get(
+                            subject.id
+                        ),
+                    )
+                ),
+            })
+
+        mission_reward_total = sum(
+            mission.reward_xp
+            for mission in missions
+        )
+
+        mission_reward_earned = sum(
+            mission.reward_xp
+            for mission in missions
+            if mission.status
+            == "completed"
+        )
+
+        # AnalÃ­tica avanzada:
+        # compara las Ãºltimas dos ventanas de 14 dÃ­as.
+        analytics = (
+            build_learning_analytics(
+                subject_id=subject_id,
+                comparison_days=14,
+            )
+        )
+
+        # El riesgo solo tiene sentido en la vista
+        # de una asignatura concreta.
+        risk = None
+
+        if subject_id is not None:
+            risk_result = (
+                build_subject_risk(
+                    subject_id
+                )
+            )
+
+            if risk_result.get("ok"):
+                risk = risk_result
+
+        return {
+            "ok": True,
+            "generated_at": (
+                datetime.now().isoformat()
+            ),
+            "view": (
+                "subject"
+                if subject_id is not None
+                else "global"
+            ),
+            "subject": (
+                {
+                    "id": (
+                        selected_subject.id
+                    ),
+                    "name": (
+                        selected_subject.name
+                    ),
+                }
+                if selected_subject
+                else None
+            ),
+            "hero": {
+                **level,
+                **streak,
+            },
+            "metrics": {
+                "study_minutes_today": (
+                    study_minutes_today
+                ),
+                "study_minutes_last_7_days": (
+                    study_minutes_week
+                ),
+                "study_hours_last_7_days": round(
+                    study_minutes_week / 60,
+                    2,
+                ),
+                "study_session_count": len(
+                    study_sessions
+                ),
+                "quiz_attempt_count": len(
+                    attempts
+                ),
+                "quiz_average_percentage": (
+                    round(
+                        quiz_average,
+                        2,
+                    )
+                    if quiz_average
+                    is not None
+                    else None
+                ),
+                "pending_task_count": len(
+                    pending_tasks
+                ),
+                "overdue_task_count": len(
+                    overdue_tasks
+                ),
+                "due_review_count": len(
+                    due_reviews
+                ),
+                "achievement_count": len(
+                    achievements
+                ),
+            },
+            "daily_activity": (
+                daily_activity
+            ),
+            "missions": {
+                "total": len(missions),
+                "completed": sum(
+                    1
+                    for mission in missions
+                    if mission.status
+                    == "completed"
+                ),
+                "reward_xp_available": (
+                    mission_reward_total
+                ),
+                "reward_xp_earned": (
+                    mission_reward_earned
+                ),
+                "items": [
+                    {
+                        "id": mission.id,
+                        "title": mission.title,
+                        "type": (
+                            mission.mission_type
+                        ),
+                        "current_value": (
+                            mission.current_value
+                        ),
+                        "target_value": (
+                            mission.target_value
+                        ),
+                        "reward_xp": (
+                            mission.reward_xp
+                        ),
+                        "status": (
+                            mission.status
+                        ),
+                    }
+                    for mission in missions
+                ],
+            },
+            "next_boss": next_boss,
+            "next_assessment": (
+                {
+                    "id": (
+                        next_assessment.id
+                    ),
+                    "title": (
+                        next_assessment.title
+                    ),
+                    "type": (
+                        next_assessment
+                        .assessment_type
+                    ),
+                    "date": (
+                        next_assessment
+                        .assessment_date
+                        .isoformat()
+                    ),
+                    "days_remaining": (
+                        next_assessment
+                        .assessment_date
+                        - today
+                    ).days,
+                    "weight_percentage": (
+                        next_assessment
+                        .weight_percentage
+                    ),
+                }
+                if next_assessment
+                else None
+            ),
+            "grade": grade_snapshot,
+            "priorities": [
+                {
+                    "id": task.id,
+                    "title": task.title,
+                    "subject_id": (
+                        task.subject_id
+                    ),
+                    "priority": (
+                        task.priority
+                    ),
+                    "status": (
+                        task.status
+                    ),
+                    "due_date": (
+                        task.due_date
+                        .isoformat()
+                        if task.due_date
+                        else None
+                    ),
+                    "days_remaining": (
+                        (
+                            task.due_date
+                            - today
+                        ).days
+                        if task.due_date
+                        else None
+                    ),
+                    "progress_percentage": (
+                        task.progress_percentage
+                    ),
+                }
+                for task in urgent_tasks[:5]
+            ],
+            "achievements": [
+                {
+                    "title": item.title,
+                    "description": (
+                        item.description
+                    ),
+                    "unlocked_at": (
+                        item.unlocked_at
+                        .isoformat()
+                    ),
+                }
+                for item in achievements[:5]
+            ],
+            "subjects": subject_cards,
+
+            # Nuevas mÃ©tricas avanzadas.
+            "analytics": (
+                analytics
+                if analytics.get("ok")
+                else None
+            ),
+            "academic_risk": risk,
+
+            "provider_called": False,
+            "estimated_cost_usd": 0,
+        }
+
+
+def register_unicore_dashboard_tools(
+    mcp,
+) -> None:
+    """Registra el dashboard unificado."""
+
+    @mcp.tool()
+    def get_unicore_dashboard(
+        subject_id: int | None = None,
+    ) -> dict:
+        """
+        Devuelve todas las mÃ©tricas importantes
+        para el dashboard de UniCore.
+        """
+
+        return build_dashboard_data(
+            subject_id=subject_id
+        )
+===== gamification_tools.py =====
+from datetime import date, datetime, timedelta
+
+from sqlalchemy import select
+
+from src.database.connection import SessionLocal
+from src.database.models import (
+    AcademicTask,
+    AchievementUnlock,
+    GamificationEvent,
+    StudyAttempt,
+    StudySession,
+    Subject,
+)
+
+
+def xp_required_for_level(
+    level: int,
+) -> int:
+    """
+    XP total necesario para alcanzar un nivel.
+
+    Nivel 1 = 0 XP
+    Nivel 2 = 100 XP
+    Nivel 3 = 250 XP
+    Nivel 4 = 450 XP...
+    """
+
+    if level <= 1:
+        return 0
+
+    return int(
+        50 * (level - 1) * level
+    )
+
+
+def calculate_level(
+    total_xp: int,
+) -> dict:
+    """Calcula nivel y progreso hacia el siguiente."""
+
+    level = 1
+
+    while (
+        xp_required_for_level(level + 1)
+        <= total_xp
+    ):
+        level += 1
+
+    current_level_start = (
+        xp_required_for_level(level)
+    )
+
+    next_level_xp = (
+        xp_required_for_level(level + 1)
+    )
+
+    xp_inside_level = (
+        total_xp - current_level_start
+    )
+
+    level_span = (
+        next_level_xp
+        - current_level_start
+    )
+
+    progress_percentage = round(
+        (
+            xp_inside_level
+            / level_span
+            * 100
+        )
+        if level_span > 0
+        else 100,
+        2,
+    )
+
+    return {
+        "level": level,
+        "total_xp": total_xp,
+        "current_level_start_xp": (
+            current_level_start
+        ),
+        "next_level_xp": next_level_xp,
+        "xp_until_next_level": max(
+            0,
+            next_level_xp - total_xp,
+        ),
+        "level_progress_percentage": (
+            progress_percentage
+        ),
+    }
+
+
+def calculate_streak(
+    study_dates: list[date],
+) -> dict:
+    """Calcula racha actual y mÃ¡xima."""
+
+    unique_dates = sorted(
+        set(study_dates)
+    )
+
+    if not unique_dates:
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+        }
+
+    longest = 1
+    running = 1
+
+    for previous, current in zip(
+        unique_dates,
+        unique_dates[1:],
+    ):
+        if (
+            current - previous
+            == timedelta(days=1)
+        ):
+            running += 1
+            longest = max(
+                longest,
+                running,
+            )
+        else:
+            running = 1
+
+    today = date.today()
+    active_dates = set(unique_dates)
+
+    if today in active_dates:
+        cursor = today
+    elif (
+        today - timedelta(days=1)
+        in active_dates
+    ):
+        cursor = today - timedelta(days=1)
+    else:
+        return {
+            "current_streak": 0,
+            "longest_streak": longest,
+        }
+
+    current_streak = 0
+
+    while cursor in active_dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+
+    return {
+        "current_streak": current_streak,
+        "longest_streak": longest,
+    }
+
+
+def create_xp_event_if_missing(
+    session,
+    *,
+    source_key: str,
+    event_type: str,
+    xp_points: int,
+    description: str,
+    subject_id: int | None = None,
+) -> bool:
+    """Crea un evento solo si todavÃ­a no existe."""
+
+    existing = session.scalar(
+        select(GamificationEvent).where(
+            GamificationEvent.source_key
+            == source_key
+        )
+    )
+
+    if existing is not None:
+        return False
+
+    session.add(
+        GamificationEvent(
+            subject_id=subject_id,
+            event_type=event_type,
+            source_key=source_key,
+            xp_points=xp_points,
+            description=description,
+        )
+    )
+
+    return True
+
+
+def unlock_achievement_if_missing(
+    session,
+    *,
+    achievement_key: str,
+    title: str,
+    description: str,
+    subject_id: int | None = None,
+) -> bool:
+    """Desbloquea un logro una sola vez."""
+
+    statement = select(
+        AchievementUnlock
+    ).where(
+        AchievementUnlock.achievement_key
+        == achievement_key
+    )
+
+    if subject_id is None:
+        statement = statement.where(
+            AchievementUnlock.subject_id
+            .is_(None)
+        )
+    else:
+        statement = statement.where(
+            AchievementUnlock.subject_id
+            == subject_id
+        )
+
+    existing = session.scalar(
+        statement
+    )
+
+    if existing is not None:
+        return False
+
+    session.add(
+        AchievementUnlock(
+            achievement_key=achievement_key,
+            subject_id=subject_id,
+            title=title,
+            description=description,
+        )
+    )
+
+    return True
+
+
+def register_gamification_tools(mcp) -> None:
+    """Registra XP, niveles, rachas y logros."""
+
+    @mcp.tool()
+    def sync_gamification(
+        subject_id: int | None = None,
+    ) -> dict:
+        """
+        Convierte actividad acadÃ©mica existente
+        en XP sin duplicar recompensas.
+        """
+
+        created_events = 0
+        new_achievements = []
+
+        with SessionLocal() as session:
+            if subject_id is not None:
+                subject = session.get(
+                    Subject,
+                    subject_id,
+                )
+
+                if subject is None:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "La asignatura no existe"
+                        ),
+                    }
+
+            study_statement = select(
+                StudySession
+            )
+
+            quiz_statement = select(
+                StudyAttempt
+            ).where(
+                StudyAttempt.status
+                == "completed"
+            )
+
+            task_statement = select(
+                AcademicTask
+            ).where(
+                AcademicTask.status
+                == "completed"
+            )
+
+            if subject_id is not None:
+                study_statement = (
+                    study_statement.where(
+                        StudySession.subject_id
+                        == subject_id
+                    )
+                )
+
+                quiz_statement = (
+                    quiz_statement.where(
+                        StudyAttempt.subject_id
+                        == subject_id
+                    )
+                )
+
+                task_statement = (
+                    task_statement.where(
+                        AcademicTask.subject_id
+                        == subject_id
+                    )
+                )
+
+            study_sessions = session.scalars(
+                study_statement
+            ).all()
+
+            completed_quizzes = session.scalars(
+                quiz_statement
+            ).all()
+
+            completed_tasks = session.scalars(
+                task_statement
+            ).all()
+
+            for item in study_sessions:
+                xp = min(
+                    item.duration_minutes,
+                    120,
+                )
+
+                created = (
+                    create_xp_event_if_missing(
+                        session,
+                        source_key=(
+                            f"study_session:{item.id}"
+                        ),
+                        event_type="study_session",
+                        xp_points=xp,
+                        description=(
+                            f"{item.duration_minutes} "
+                            "minutos de estudio"
+                        ),
+                        subject_id=item.subject_id,
+                    )
+                )
+
+                if created:
+                    created_events += 1
+
+            for attempt in completed_quizzes:
+                score = (
+                    attempt.score_percentage
+                    or 0
+                )
+
+                bonus = int(
+                    score // 10
+                )
+
+                xp = 20 + bonus
+
+                created = (
+                    create_xp_event_if_missing(
+                        session,
+                        source_key=(
+                            f"quiz_attempt:"
+                            f"{attempt.id}"
+                        ),
+                        event_type="quiz_completed",
+                        xp_points=xp,
+                        description=(
+                            "Quiz completado con "
+                            f"{round(score, 2)} %"
+                        ),
+                        subject_id=(
+                            attempt.subject_id
+                        ),
+                    )
+                )
+
+                if created:
+                    created_events += 1
+
+            for task in completed_tasks:
+                xp = 30 + (
+                    task.priority * 5
+                )
+
+                created = (
+                    create_xp_event_if_missing(
+                        session,
+                        source_key=(
+                            f"academic_task:"
+                            f"{task.id}"
+                        ),
+                        event_type="task_completed",
+                        xp_points=xp,
+                        description=(
+                            "Tarea completada: "
+                            f"{task.title}"
+                        ),
+                        subject_id=(
+                            task.subject_id
+                        ),
+                    )
+                )
+
+                if created:
+                    created_events += 1
+
+            session.flush()
+
+            xp_statement = select(
+                GamificationEvent
+            )
+
+            all_study_statement = select(
+                StudySession
+            )
+
+            if subject_id is not None:
+                xp_statement = (
+                    xp_statement.where(
+                        GamificationEvent.subject_id
+                        == subject_id
+                    )
+                )
+
+                all_study_statement = (
+                    all_study_statement.where(
+                        StudySession.subject_id
+                        == subject_id
+                    )
+                )
+
+            xp_events = session.scalars(
+                xp_statement
+            ).all()
+
+            streak_sessions = session.scalars(
+                all_study_statement
+            ).all()
+
+            total_xp = sum(
+                event.xp_points
+                for event in xp_events
+            )
+
+            streak = calculate_streak(
+                [
+                    item.session_date
+                    for item in streak_sessions
+                ]
+            )
+
+            achievements_to_check = [
+                (
+                    "first_100_xp",
+                    total_xp >= 100,
+                    "Primer centenar",
+                    "Has conseguido 100 XP.",
+                ),
+                (
+                    "first_500_xp",
+                    total_xp >= 500,
+                    "En marcha",
+                    "Has conseguido 500 XP.",
+                ),
+                (
+                    "streak_3",
+                    streak["longest_streak"] >= 3,
+                    "Tres dÃ­as seguidos",
+                    (
+                        "Has estudiado durante "
+                        "3 dÃ­as consecutivos."
+                    ),
+                ),
+                (
+                    "streak_7",
+                    streak["longest_streak"] >= 7,
+                    "Semana perfecta",
+                    (
+                        "Has estudiado durante "
+                        "7 dÃ­as consecutivos."
+                    ),
+                ),
+                (
+                    "five_study_sessions",
+                    len(streak_sessions) >= 5,
+                    "Constancia",
+                    (
+                        "Has registrado "
+                        "5 sesiones de estudio."
+                    ),
+                ),
+                (
+                    "ten_study_sessions",
+                    len(streak_sessions) >= 10,
+                    "En serio",
+                    (
+                        "Has registrado "
+                        "10 sesiones de estudio."
+                    ),
+                ),
+            ]
+
+            for (
+                key,
+                condition,
+                title,
+                description,
+            ) in achievements_to_check:
+
+                if not condition:
+                    continue
+
+                unlocked = (
+                    unlock_achievement_if_missing(
+                        session,
+                        achievement_key=key,
+                        title=title,
+                        description=description,
+                        subject_id=subject_id,
+                    )
+                )
+
+                if unlocked:
+                    new_achievements.append(
+                        title
+                    )
+
+            # Logro por quiz >= 90 %
+            if any(
+                (
+                    attempt.score_percentage
+                    or 0
+                )
+                >= 90
+                for attempt
+                in completed_quizzes
+            ):
+                unlocked = (
+                    unlock_achievement_if_missing(
+                        session,
+                        achievement_key=(
+                            "quiz_90"
+                        ),
+                        title="Dominio demostrado",
+                        description=(
+                            "Has conseguido al menos "
+                            "90 % en un quiz."
+                        ),
+                        subject_id=subject_id,
+                    )
+                )
+
+                if unlocked:
+                    new_achievements.append(
+                        "Dominio demostrado"
+                    )
+
+            session.commit()
+
+            level_data = calculate_level(
+                total_xp
+            )
+
+            return {
+                "ok": True,
+                "new_xp_events": (
+                    created_events
+                ),
+                "new_achievements": (
+                    new_achievements
+                ),
+                "gamification": {
+                    **level_data,
+                    **streak,
+                },
+                "provider_called": False,
+                "estimated_cost_usd": 0,
+            }
+
+    @mcp.tool()
+    def get_gamification_profile(
+        subject_id: int | None = None,
+    ) -> dict:
+        """Devuelve el perfil de progreso gamificado."""
+
+        with SessionLocal() as session:
+            if subject_id is not None:
+                subject = session.get(
+                    Subject,
+                    subject_id,
+                )
+
+                if subject is None:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "La asignatura no existe"
+                        ),
+                    }
+            else:
+                subject = None
+
+            event_statement = select(
+                GamificationEvent
+            )
+
+            study_statement = select(
+                StudySession
+            )
+
+            achievement_statement = select(
+                AchievementUnlock
+            )
+
+            if subject_id is not None:
+                event_statement = (
+                    event_statement.where(
+                        GamificationEvent.subject_id
+                        == subject_id
+                    )
+                )
+
+                study_statement = (
+                    study_statement.where(
+                        StudySession.subject_id
+                        == subject_id
+                    )
+                )
+
+                achievement_statement = (
+                    achievement_statement.where(
+                        AchievementUnlock.subject_id
+                        == subject_id
+                    )
+                )
+
+            events = session.scalars(
+                event_statement.order_by(
+                    GamificationEvent.created_at.desc()
+                )
+            ).all()
+
+            study_sessions = session.scalars(
+                study_statement
+            ).all()
+
+            achievements = session.scalars(
+                achievement_statement.order_by(
+                    AchievementUnlock.unlocked_at.desc()
+                )
+            ).all()
+
+            total_xp = sum(
+                event.xp_points
+                for event in events
+            )
+
+            streak = calculate_streak(
+                [
+                    item.session_date
+                    for item in study_sessions
+                ]
+            )
+
+            level_data = calculate_level(
+                total_xp
+            )
+
+            xp_by_type = {}
+
+            for event in events:
+                xp_by_type[event.event_type] = (
+                    xp_by_type.get(
+                        event.event_type,
+                        0,
+                    )
+                    + event.xp_points
+                )
+
+            return {
+                "ok": True,
+                "subject": (
+                    {
+                        "id": subject.id,
+                        "name": subject.name,
+                    }
+                    if subject
+                    else None
+                ),
+                "profile": {
+                    **level_data,
+                    **streak,
+                    "achievement_count": (
+                        len(achievements)
+                    ),
+                },
+                "xp_by_type": xp_by_type,
+                "achievements": [
+                    {
+                        "key": (
+                            item.achievement_key
+                        ),
+                        "title": item.title,
+                        "description": (
+                            item.description
+                        ),
+                        "unlocked_at": (
+                            item.unlocked_at
+                            .isoformat()
+                        ),
+                    }
+                    for item in achievements
+                ],
+                "recent_xp_events": [
+                    {
+                        "event_type": (
+                            item.event_type
+                        ),
+                        "xp_points": (
+                            item.xp_points
+                        ),
+                        "description": (
+                            item.description
+                        ),
+                        "created_at": (
+                            item.created_at
+                            .isoformat()
+                        ),
+                    }
+                    for item in events[:10]
+                ],
+                "provider_called": False,
+                "estimated_cost_usd": 0,
+            }
+===== decision_engine.py =====
+from datetime import (
+    date,
+    datetime,
+)
+
+from sqlalchemy import select
+
+from src.database.connection import (
+    SessionLocal,
+)
+
+from src.database.models import (
+    AcademicTask,
+    Assessment,
+    KnowledgeConcept,
+    ReviewItem,
+    Subject,
+)
+
+from src.task_planner_tools import (
+    calculate_task_urgency,
+)
+
+
+def clamp(
+    value: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    return max(
+        minimum,
+        min(
+            maximum,
+            value,
+        ),
+    )
+
+
+def recommendation_priority_label(
+    score: float,
+) -> str:
+    if score >= 80:
+        return "critical"
+
+    if score >= 60:
+        return "high"
+
+    if score >= 40:
+        return "medium"
+
+    return "low"
+
+
+def task_recommendation(
+    task: AcademicTask,
+    subject_name: str | None,
+    today: date,
+) -> dict:
+    """
+    Convierte una tarea pendiente en una posible acciÃ³n.
+    """
+
+    urgency = calculate_task_urgency(
+        task,
+        today,
+    )
+
+    raw_score = float(
+        urgency[
+            "planning_score"
+        ]
+    )
+
+    score = clamp(
+        raw_score,
+        0,
+        100,
+    )
+
+    remaining_minutes = urgency.get(
+        "remaining_minutes"
+    )
+
+    if (
+        remaining_minutes is None
+        or remaining_minutes <= 0
+    ):
+        remaining_minutes = 30
+
+    suggested_minutes = int(
+        clamp(
+            remaining_minutes,
+            15,
+            60,
+        )
+    )
+
+    reasons = []
+
+    days = urgency.get(
+        "days_until_due"
+    )
+
+    if days is not None:
+        if days < 0:
+            reasons.append(
+                "La tarea estÃ¡ vencida."
+            )
+
+        elif days == 0:
+            reasons.append(
+                "La tarea vence hoy."
+            )
+
+        elif days == 1:
+            reasons.append(
+                "La tarea vence maÃ±ana."
+            )
+
+        elif days <= 3:
+            reasons.append(
+                f"La tarea vence en {days} dÃ­as."
+            )
+
+    if task.priority >= 4:
+        reasons.append(
+            f"Tiene prioridad {task.priority}/5."
+        )
+
+    if task.progress_percentage < 50:
+        reasons.append(
+            "TodavÃ­a queda una parte importante por completar."
+        )
+
+    elif task.progress_percentage < 100:
+        reasons.append(
+            f"EstÃ¡ al {task.progress_percentage}% de progreso."
+        )
+
+    return {
+        "type": "task",
+        "source_id": task.id,
+        "subject_id": task.subject_id,
+        "subject_name": subject_name,
+        "title": task.title,
+        "score": round(
+            score,
+            2,
+        ),
+        "priority": (
+            recommendation_priority_label(
+                score
+            )
+        ),
+        "suggested_minutes": (
+            suggested_minutes
+        ),
+        "reasons": reasons,
+        "action": (
+            "Avanza esta tarea durante "
+            f"{suggested_minutes} minutos."
+        ),
+        "metadata": {
+            "task_type": task.task_type,
+            "status": task.status,
+            "priority_value": task.priority,
+            "due_date": (
+                task.due_date.isoformat()
+                if task.due_date
+                else None
+            ),
+            "progress_percentage": (
+                task.progress_percentage
+            ),
+            "remaining_minutes": (
+                remaining_minutes
+            ),
+        },
+    }
+
+
+def review_recommendation(
+    review: ReviewItem,
+    subject_name: str,
+    now: datetime,
+) -> dict:
+    """
+    Convierte un repaso pendiente en una acciÃ³n.
+    """
+
+    overdue_hours = max(
+        0,
+        (
+            now
+            - review.next_review_at
+        ).total_seconds()
+        / 3600,
+    )
+
+    overdue_days = (
+        overdue_hours
+        / 24
+    )
+
+    score = (
+        40
+        + review.priority * 8
+        + min(
+            25,
+            overdue_days * 5,
+        )
+        + min(
+            15,
+            review.incorrect_count * 4,
+        )
+    )
+
+    score = clamp(
+        score,
+        0,
+        100,
+    )
+
+    suggested_minutes = 15
+
+    reasons = [
+        "Este repaso ya estÃ¡ pendiente."
+    ]
+
+    if review.incorrect_count >= 2:
+        reasons.append(
+            "Ha generado varios errores anteriormente."
+        )
+
+    if review.priority >= 4:
+        reasons.append(
+            "Tiene prioridad alta dentro del sistema de repaso."
+        )
+
+    if review.correct_streak == 0:
+        reasons.append(
+            "TodavÃ­a no tiene una racha de respuestas correctas."
+        )
+
+    return {
+        "type": "review",
+        "source_id": review.id,
+        "subject_id": review.subject_id,
+        "subject_name": subject_name,
+        "title": (
+            f"Repasar: {review.topic}"
+        ),
+        "score": round(
+            score,
+            2,
+        ),
+        "priority": (
+            recommendation_priority_label(
+                score
+            )
+        ),
+        "suggested_minutes": (
+            suggested_minutes
+        ),
+        "reasons": reasons,
+        "action": (
+            f"Repasa {review.topic} "
+            f"durante {suggested_minutes} minutos."
+        ),
+        "metadata": {
+            "topic": review.topic,
+            "review_priority": (
+                review.priority
+            ),
+            "incorrect_count": (
+                review.incorrect_count
+            ),
+            "correct_streak": (
+                review.correct_streak
+            ),
+            "next_review_at": (
+                review.next_review_at
+                .isoformat()
+            ),
+        },
+    }
+
+
+def concept_recommendation(
+    concept: KnowledgeConcept,
+    subject_name: str,
+) -> dict:
+    """
+    Convierte un concepto dÃ©bil o en desarrollo
+    en una posible acciÃ³n de estudio.
+    """
+
+    mastery = (
+        concept.mastery_percentage
+    )
+
+    if mastery is None:
+        score = 35
+
+    else:
+        score = (
+            80
+            - mastery * 0.5
+        )
+
+    if concept.status == "weak":
+        score += 20
+
+    elif concept.status == "developing":
+        score += 8
+
+    elif concept.status == "unassessed":
+        score += 5
+
+    score = clamp(
+        score,
+        0,
+        100,
+    )
+
+    suggested_minutes = (
+        25
+        if concept.status
+        == "weak"
+        else 20
+    )
+
+    reasons = []
+
+    if concept.status == "weak":
+        reasons.append(
+            "El Knowledge Map identifica este concepto como dÃ©bil."
+        )
+
+    elif concept.status == "developing":
+        reasons.append(
+            "El concepto todavÃ­a estÃ¡ en desarrollo."
+        )
+
+    elif concept.status == "unassessed":
+        reasons.append(
+            "Hay exposiciÃ³n al tema, pero todavÃ­a no suficiente evidencia evaluada."
+        )
+
+    if (
+        mastery is not None
+        and mastery < 60
+    ):
+        reasons.append(
+            f"Dominio actual estimado: {mastery:.1f}%."
+        )
+
+    if (
+        concept.assessed_evidence_count
+        <= 1
+    ):
+        reasons.append(
+            "Hay poca evidencia evaluada, por lo que conviene comprobar el dominio."
+        )
+
+    return {
+        "type": "knowledge",
+        "source_id": concept.id,
+        "subject_id": concept.subject_id,
+        "subject_name": subject_name,
+        "title": (
+            f"Trabajar: {concept.name}"
+        ),
+        "score": round(
+            score,
+            2,
+        ),
+        "priority": (
+            recommendation_priority_label(
+                score
+            )
+        ),
+        "suggested_minutes": (
+            suggested_minutes
+        ),
+        "reasons": reasons,
+        "action": (
+            f"Estudia o practica {concept.name} "
+            f"durante {suggested_minutes} minutos."
+        ),
+        "metadata": {
+            "concept": concept.name,
+            "mastery_percentage": (
+                mastery
+            ),
+            "status": (
+                concept.status
+            ),
+            "evidence_count": (
+                concept.evidence_count
+            ),
+            "assessed_evidence_count": (
+                concept.assessed_evidence_count
+            ),
+            "exposure_minutes": (
+                concept.exposure_minutes
+            ),
+        },
+    }
+
+
+def assessment_recommendation(
+    assessment: Assessment,
+    subject_name: str,
+    today: date,
+) -> dict | None:
+    """
+    Convierte una evaluaciÃ³n prÃ³xima
+    en una acciÃ³n de preparaciÃ³n.
+    """
+
+    if (
+        assessment.assessment_date
+        is None
+    ):
+        return None
+
+    days_remaining = (
+        assessment.assessment_date
+        - today
+    ).days
+
+    if days_remaining < 0:
+        return None
+
+    if days_remaining > 21:
+        return None
+
+    if days_remaining == 0:
+        urgency = 80
+
+    elif days_remaining == 1:
+        urgency = 70
+
+    elif days_remaining <= 3:
+        urgency = 60
+
+    elif days_remaining <= 7:
+        urgency = 45
+
+    elif days_remaining <= 14:
+        urgency = 30
+
+    else:
+        urgency = 15
+
+    weight_points = min(
+        20,
+        assessment.weight_percentage
+        * 0.4,
+    )
+
+    exam_bonus = (
+        10
+        if assessment.assessment_type
+        == "exam"
+        else 0
+    )
+
+    score = (
+        urgency
+        + weight_points
+        + exam_bonus
+    )
+
+    score = clamp(
+        score,
+        0,
+        100,
+    )
+
+    if days_remaining <= 3:
+        suggested_minutes = 40
+    elif days_remaining <= 7:
+        suggested_minutes = 30
+    else:
+        suggested_minutes = 20
+
+    reasons = [
+        (
+            f"{assessment.title} es en "
+            f"{days_remaining} dÃ­a(s)."
+        )
+    ]
+
+    if (
+        assessment.weight_percentage
+        >= 30
+    ):
+        reasons.append(
+            (
+                "Tiene un peso importante "
+                f"({assessment.weight_percentage:.0f}%)."
+            )
+        )
+
+    if (
+        assessment.assessment_type
+        == "exam"
+    ):
+        reasons.append(
+            "Es un examen y conviene preparar el contenido con antelaciÃ³n."
+        )
+
+    return {
+        "type": "assessment",
+        "source_id": assessment.id,
+        "subject_id": assessment.subject_id,
+        "subject_name": subject_name,
+        "title": (
+            f"Preparar: {assessment.title}"
+        ),
+        "score": round(
+            score,
+            2,
+        ),
+        "priority": (
+            recommendation_priority_label(
+                score
+            )
+        ),
+        "suggested_minutes": (
+            suggested_minutes
+        ),
+        "reasons": reasons,
+        "action": (
+            f"Dedica {suggested_minutes} minutos "
+            f"a preparar {assessment.title}."
+        ),
+        "metadata": {
+            "assessment_type": (
+                assessment.assessment_type
+            ),
+            "assessment_date": (
+                assessment.assessment_date
+                .isoformat()
+            ),
+            "days_remaining": (
+                days_remaining
+            ),
+            "weight_percentage": (
+                assessment.weight_percentage
+            ),
+        },
+    }
+
+
+def fit_recommendations_to_time(
+    recommendations: list[dict],
+    available_minutes: int,
+    maximum_actions: int,
+) -> list[dict]:
+    """
+    Selecciona acciones hasta llenar aproximadamente
+    el tiempo disponible.
+
+    No corta una acciÃ³n por debajo de 10 minutos.
+    """
+
+    selected = []
+
+    remaining = (
+        available_minutes
+    )
+
+    for item in recommendations:
+        if (
+            len(selected)
+            >= maximum_actions
+        ):
+            break
+
+        if remaining < 10:
+            break
+
+        suggested = item[
+            "suggested_minutes"
+        ]
+
+        allocated = min(
+            suggested,
+            remaining,
+        )
+
+        if allocated < 10:
+            continue
+
+        selected_item = {
+            **item,
+            "allocated_minutes": int(
+                allocated
+            ),
+        }
+
+        selected.append(
+            selected_item
+        )
+
+        remaining -= int(
+            allocated
+        )
+
+    return selected
+
+
+def build_decision_plan(
+    available_minutes: int = 45,
+    subject_id: int | None = None,
+    maximum_actions: int = 3,
+) -> dict:
+    """
+    Decide quÃ© deberÃ­a hacer el estudiante ahora.
+
+    Todo se calcula localmente.
+    No usa IA.
+    """
+
+    if (
+        available_minutes < 10
+        or available_minutes > 480
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "available_minutes debe estar "
+                "entre 10 y 480"
+            ),
+        }
+
+    if (
+        maximum_actions < 1
+        or maximum_actions > 10
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "maximum_actions debe estar "
+                "entre 1 y 10"
+            ),
+        }
+
+    today = date.today()
+    now = datetime.now()
+
+    with SessionLocal() as session:
+        selected_subject = None
+
+        if subject_id is not None:
+            selected_subject = session.get(
+                Subject,
+                subject_id,
+            )
+
+            if selected_subject is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "La asignatura no existe"
+                    ),
+                }
+
+        subjects = session.scalars(
+            select(
+                Subject
+            )
+        ).all()
+
+        subject_names = {
+            subject.id: subject.name
+            for subject in subjects
+        }
+
+        task_statement = (
+            select(
+                AcademicTask
+            )
+            .where(
+                AcademicTask.status.notin_(
+                    [
+                        "completed",
+                        "cancelled",
+                    ]
+                )
+            )
+        )
+
+        review_statement = (
+            select(
+                ReviewItem
+            )
+            .where(
+                ReviewItem.status
+                != "mastered",
+                ReviewItem.next_review_at
+                <= now,
+            )
+        )
+
+        concept_statement = (
+            select(
+                KnowledgeConcept
+            )
+            .where(
+                KnowledgeConcept.status.in_(
+                    [
+                        "weak",
+                        "developing",
+                        "unassessed",
+                    ]
+                )
+            )
+        )
+
+        assessment_statement = (
+            select(
+                Assessment
+            )
+            .where(
+                Assessment.status
+                == "pending"
+            )
+        )
+
+        if subject_id is not None:
+            task_statement = (
+                task_statement.where(
+                    AcademicTask.subject_id
+                    == subject_id
+                )
+            )
+
+            review_statement = (
+                review_statement.where(
+                    ReviewItem.subject_id
+                    == subject_id
+                )
+            )
+
+            concept_statement = (
+                concept_statement.where(
+                    KnowledgeConcept.subject_id
+                    == subject_id
+                )
+            )
+
+            assessment_statement = (
+                assessment_statement.where(
+                    Assessment.subject_id
+                    == subject_id
+                )
+            )
+
+        tasks = session.scalars(
+            task_statement
+        ).all()
+
+        reviews = session.scalars(
+            review_statement
+        ).all()
+
+        concepts = session.scalars(
+            concept_statement
+        ).all()
+
+        assessments = session.scalars(
+            assessment_statement
+        ).all()
+
+        recommendations = []
+
+        for task in tasks:
+            recommendations.append(
+                task_recommendation(
+                    task,
+                    subject_names.get(
+                        task.subject_id
+                    ),
+                    today,
+                )
+            )
+
+        for review in reviews:
+            recommendations.append(
+                review_recommendation(
+                    review,
+                    subject_names.get(
+                        review.subject_id,
+                        "Asignatura",
+                    ),
+                    now,
+                )
+            )
+
+        for concept in concepts:
+            recommendations.append(
+                concept_recommendation(
+                    concept,
+                    subject_names.get(
+                        concept.subject_id,
+                        "Asignatura",
+                    ),
+                )
+            )
+
+        for assessment in assessments:
+            recommendation = (
+                assessment_recommendation(
+                    assessment,
+                    subject_names.get(
+                        assessment.subject_id,
+                        "Asignatura",
+                    ),
+                    today,
+                )
+            )
+
+            if (
+                recommendation
+                is not None
+            ):
+                recommendations.append(
+                    recommendation
+                )
+
+        recommendations.sort(
+            key=lambda item: (
+                -item["score"],
+                item["suggested_minutes"],
+                item["type"],
+            )
+        )
+
+        selected = (
+            fit_recommendations_to_time(
+                recommendations,
+                available_minutes,
+                maximum_actions,
+            )
+        )
+
+        allocated_minutes = sum(
+            item["allocated_minutes"]
+            for item in selected
+        )
+
+        remaining_minutes = (
+            available_minutes
+            - allocated_minutes
+        )
+
+        if selected:
+            top = selected[0]
+
+            headline = (
+                f"Empieza por: "
+                f"{top['title']}"
+            )
+        else:
+            headline = (
+                "No hay una prioridad acadÃ©mica "
+                "urgente detectada."
+            )
+
+        return {
+            "ok": True,
+            "generated_for_date": (
+                today.isoformat()
+            ),
+            "subject": (
+                {
+                    "id": selected_subject.id,
+                    "name": selected_subject.name,
+                }
+                if selected_subject
+                else None
+            ),
+            "available_minutes": (
+                available_minutes
+            ),
+            "headline": headline,
+            "recommended_action_count": (
+                len(selected)
+            ),
+            "allocated_minutes": (
+                allocated_minutes
+            ),
+            "remaining_minutes": (
+                remaining_minutes
+            ),
+            "actions": selected,
+            "candidate_count": (
+                len(recommendations)
+            ),
+            "scoring_note": (
+                "La puntuaciÃ³n es una prioridad interna "
+                "basada en urgencia, tareas, repasos, "
+                "evaluaciones y Knowledge Map. "
+                "No es una predicciÃ³n de rendimiento."
+            ),
+            "cost": {
+                "ai_used": False,
+                "estimated_cost": 0,
+            },
+        }
+
+
+def register_decision_engine(
+    mcp,
+) -> None:
+    """
+    Expone una sola Tool pÃºblica.
+
+    Es una Tool porque recibe parÃ¡metros dinÃ¡micos
+    y ejecuta un cÃ¡lculo de planificaciÃ³n.
+    """
+
+    @mcp.tool()
+    def recommend_next_actions(
+        available_minutes: int = 45,
+        subject_id: int | None = None,
+        maximum_actions: int = 3,
+    ) -> dict:
+        """
+        Decide quÃ© deberÃ­a hacer el estudiante ahora
+        con el tiempo disponible.
+
+        Coste IA: 0.
+        """
+
+        return build_decision_plan(
+            available_minutes=(
+                available_minutes
+            ),
+            subject_id=subject_id,
+            maximum_actions=(
+                maximum_actions
+            ),
+        )
