@@ -180,6 +180,18 @@ export type StudyData = {
   reviews: { ok: boolean; count: number; due_count: number; reviews: Array<{ id: number; topic: string; status: string; next_review_at: string; priority: number }> } | null;
 };
 
+export type KnowledgeConcept = {
+  id: number; subject_id: number; name: string; mastery_percentage: number | null;
+  status: "strong" | "developing" | "weak" | "unassessed"; evidence_count: number;
+  assessed_evidence_count: number; exposure_minutes: number; last_evidence_at: string | null;
+};
+
+export type KnowledgeData = {
+  ok: boolean; subject: { id: number; name: string };
+  summary: { concept_count: number; assessed_concept_count: number; overall_mastery_percentage: number | null; strong_count: number; developing_count: number; weak_count: number; unassessed_count: number };
+  priority_concepts: KnowledgeConcept[]; concepts: KnowledgeConcept[];
+};
+
 async function requestJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
   if (!response.ok) {
@@ -212,4 +224,8 @@ export function getTasks(subjectId?: number): Promise<TasksData> {
 
 export function getStudy(subjectId: number): Promise<StudyData> {
   return requestJson<StudyData>(`/api/study?subject_id=${subjectId}`);
+}
+
+export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
+  return requestJson<KnowledgeData>(`/api/subjects/${subjectId}/knowledge`);
 }

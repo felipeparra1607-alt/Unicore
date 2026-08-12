@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from src.decision_engine import build_decision_plan
+from src.knowledge_map import build_subject_knowledge_map
 from src.mcp_resources import _build_subject_reviews, _build_subject_study, _build_tasks
 from src.unicore_dashboard import build_dashboard_data
 
@@ -82,6 +83,16 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     reviews = _build_subject_reviews(subject_id)
                     data["reviews"] = reviews if reviews.get("ok") else None
                 self._send_json(data, 200 if data.get("ok") else 400)
+                return
+
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/knowledge"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 4:
+                    self._send_json({"ok": False, "error": "Ruta de conocimiento inválida"}, 404)
+                    return
+                subject_id = int(path_parts[2])
+                data = build_subject_knowledge_map(subject_id)
+                self._send_json(data, 200 if data.get("ok") else 404)
                 return
 
             self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
