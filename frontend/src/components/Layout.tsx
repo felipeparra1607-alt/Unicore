@@ -9,6 +9,7 @@ import {
   Menu,
   Moon,
   Search,
+  Settings,
   Sparkles,
   Sun,
   X,
@@ -23,6 +24,7 @@ const sections = [
   { id: "knowledge", label: "Conocimiento", icon: BarChart3 },
   { id: "agent", label: "Agent", icon: BrainCircuit },
   { id: "jobs", label: "Jobs", icon: BriefcaseBusiness },
+  { id: "settings", label: "Ajustes", icon: Settings },
 ] as const;
 
 export type SectionId = (typeof sections)[number]["id"];

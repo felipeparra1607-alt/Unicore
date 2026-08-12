@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 from src.decision_engine import build_decision_plan
 from src.knowledge_map import build_subject_knowledge_map
+from src.jobs import get_job, list_jobs
 from src.mcp_resources import _build_subject_reviews, _build_subject_study, _build_tasks
 from src.runtime_context import build_runtime_context
 from src.unicore_dashboard import build_dashboard_data
@@ -46,6 +47,25 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("El cuerpo debe ser un objeto JSON")
+        return payload
+
+    def _job_payload(self, job, include_detail: bool = False) -> dict:
+        payload = {
+            "id": job.job_id,
+            "status": job.status,
+            "kind": job.kind,
+            "objective": job.objective,
+            "created_at": job.created_at,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+        }
+        if include_detail:
+            payload.update({
+                "context_summary": job.context_summary,
+                "expected_output": job.expected_output,
+                "result": job.result,
+                "error": job.error,
+            })
         return payload
 
     def do_GET(self):
@@ -105,6 +125,22 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 subject_id = int(path_parts[2])
                 data = build_subject_knowledge_map(subject_id)
                 self._send_json(data, 200 if data.get("ok") else 404)
+                return
+
+            if parsed.path == "/api/jobs":
+                status = query.get("status", [None])[0]
+                limit = int(query.get("limit", ["50"])[0])
+                jobs = list_jobs(status=status, limit=limit)
+                self._send_json({"ok": True, "count": len(jobs), "jobs": [self._job_payload(job) for job in jobs]})
+                return
+
+            if parsed.path.startswith("/api/jobs/"):
+                job_id = parsed.path.removeprefix("/api/jobs/").strip()
+                job = get_job(job_id)
+                if job is None:
+                    self._send_json({"ok": False, "error": "El trabajo no existe"}, 404)
+                    return
+                self._send_json({"ok": True, "job": self._job_payload(job, include_detail=True)})
                 return
 
             self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)

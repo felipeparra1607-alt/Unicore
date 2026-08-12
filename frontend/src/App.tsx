@@ -7,6 +7,7 @@ import TasksPage from "./pages/TasksPage";
 import StudyPage from "./pages/StudyPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import AgentPage from "./pages/AgentPage";
+import JobsPage from "./pages/JobsPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -39,6 +40,11 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
     title: "Análisis largos en segundo plano",
     body: "Aquí aparecerán los análisis profundos, su estado y sus resultados cuando conectemos Handoff + Worker.",
   },
+  settings: {
+    eyebrow: "Ajustes",
+    title: "Preferencias de UniCore",
+    body: "Configura el tema y las preferencias locales de tu espacio académico.",
+  },
 };
 
 export default function App() {
@@ -68,6 +74,8 @@ export default function App() {
         <KnowledgePage />
       ) : section === "agent" ? (
         <AgentPage />
+      ) : section === "jobs" ? (
+        <JobsPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
           <p className="uc-eyebrow">{sectionCopy[section].eyebrow}</p>

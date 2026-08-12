@@ -239,3 +239,8 @@ export function sendAgentMessage(message: string, conversationId?: string): Prom
     body: JSON.stringify({ message, conversation_id: conversationId }),
   });
 }
+
+export type JobSummary = { id: string; status: "pending" | "running" | "completed" | "failed"; kind: string; objective: string; created_at: string; started_at: string | null; completed_at: string | null };
+export type JobDetail = JobSummary & { context_summary: string; expected_output: string; result: string | null; error: string | null };
+export function getJobs(status?: string): Promise<{ ok: boolean; count: number; jobs: JobSummary[] }> { const params = status ? `?status=${status}` : ""; return requestJson(`/api/jobs${params}`); }
+export function getJob(id: string): Promise<{ ok: boolean; job: JobDetail }> { return requestJson(`/api/jobs/${encodeURIComponent(id)}`); }
