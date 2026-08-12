@@ -6,6 +6,7 @@ import SubjectDetailPage from "./pages/SubjectDetailPage";
 import TasksPage from "./pages/TasksPage";
 import StudyPage from "./pages/StudyPage";
 import KnowledgePage from "./pages/KnowledgePage";
+import AgentPage from "./pages/AgentPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -65,6 +66,8 @@ export default function App() {
         <StudyPage />
       ) : section === "knowledge" ? (
         <KnowledgePage />
+      ) : section === "agent" ? (
+        <AgentPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
           <p className="uc-eyebrow">{sectionCopy[section].eyebrow}</p>

@@ -192,8 +192,8 @@ export type KnowledgeData = {
   priority_concepts: KnowledgeConcept[]; concepts: KnowledgeConcept[];
 };
 
-async function requestJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.error ?? `La API de UniCore respondió con ${response.status}.`);
@@ -228,4 +228,14 @@ export function getStudy(subjectId: number): Promise<StudyData> {
 
 export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
   return requestJson<KnowledgeData>(`/api/subjects/${subjectId}/knowledge`);
+}
+
+export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; job?: { status: string; kind: string; objective: string; created_at: string } };
+
+export function sendAgentMessage(message: string, conversationId?: string): Promise<AgentResponse> {
+  return requestJson<AgentResponse>("/api/agent/message", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, conversation_id: conversationId }),
+  });
 }

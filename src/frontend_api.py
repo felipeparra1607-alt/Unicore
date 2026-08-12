@@ -1,3 +1,4 @@
+import asyncio
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -5,7 +6,9 @@ from urllib.parse import parse_qs, urlparse
 from src.decision_engine import build_decision_plan
 from src.knowledge_map import build_subject_knowledge_map
 from src.mcp_resources import _build_subject_reviews, _build_subject_study, _build_tasks
+from src.runtime_context import build_runtime_context
 from src.unicore_dashboard import build_dashboard_data
+from src.unicore_agent import UniCoreAgent
 
 HOST = "127.0.0.1"
 PORT = 8766
@@ -25,7 +28,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -33,8 +36,17 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def _read_json(self) -> dict:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length <= 0 or content_length > 65536:
+            raise ValueError("Cuerpo JSON vacío o demasiado grande")
+        payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("El cuerpo debe ser un objeto JSON")
+        return payload
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -104,6 +116,48 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 "ok": False,
                 "error": f"Error interno de la API local: {type(exc).__name__}: {exc}",
             }, 500)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/api/agent/message":
+                payload = self._read_json()
+                message = str(payload.get("message", "")).strip()
+                if not message:
+                    self._send_json({"ok": False, "error": "Escribe un mensaje para UniCore"}, 400)
+                    return
+                runtime_context = build_runtime_context(
+                    conversation_id=payload.get("conversation_id"),
+                    allow_writes=False,
+                )
+                agent = UniCoreAgent(
+                    maximum_steps=4,
+                    maximum_output_tokens=600,
+                    runtime_context=runtime_context,
+                )
+                result = asyncio.run(agent.run(message))
+                response = {
+                    "ok": bool(result.get("ok")),
+                    "answer": result.get("answer"),
+                    "status": result.get("status", "completed" if result.get("ok") else "error"),
+                    "conversation_id": runtime_context.conversation_id,
+                    "error": result.get("error"),
+                }
+                job = result.get("job")
+                if isinstance(job, dict):
+                    response["job"] = {
+                        "status": job.get("status"),
+                        "kind": job.get("kind"),
+                        "objective": job.get("objective"),
+                        "created_at": job.get("created_at"),
+                    }
+                self._send_json(response, 200 if response["ok"] else 502)
+                return
+            self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception:
+            self._send_json({"ok": False, "error": "UniCore Agent no pudo completar la solicitud"}, 500)
 
     def log_message(self, format, *args):
         return
