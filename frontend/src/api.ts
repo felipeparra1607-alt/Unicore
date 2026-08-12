@@ -21,6 +21,8 @@ export type DashboardSubject = {
 export type DashboardData = {
   ok: boolean;
   generated_at: string;
+  view?: "global" | "subject";
+  subject?: { id: number; name: string } | null;
   hero: {
     level: number;
     total_xp: number;
@@ -91,7 +93,31 @@ export type DashboardData = {
   }>;
   achievements: Array<{ title: string; description: string; unlocked_at: string }>;
   subjects: DashboardSubject[];
-  analytics: Record<string, unknown> | null;
+  analytics: SubjectAnalytics | null;
+  academic_risk: AcademicRisk | null;
+};
+
+export type SubjectAnalytics = {
+  current: {
+    study_minutes: number;
+    active_days: number;
+    average_focus: number | null;
+    average_satisfaction: number | null;
+    quiz_average_percentage: number | null;
+    plan_completion_percentage: number | null;
+    task_time_efficiency_percentage: number | null;
+    study_efficiency_index: number | null;
+  };
+  previous: { study_minutes: number; active_days: number; average_focus: number | null; average_satisfaction: number | null; quiz_average_percentage: number | null };
+  trends: { study_minutes_change_percentage: number | null; active_days_change_percentage: number | null; focus_change_percentage: number | null; quiz_average_change_percentage: number | null };
+};
+
+export type AcademicRisk = {
+  risk_level?: string;
+  risk_score?: number;
+  summary?: string;
+  reasons?: string[];
+  recommendations?: string[];
 };
 
 export type DecisionAction = {
@@ -131,14 +157,18 @@ async function requestJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function getDashboard(): Promise<DashboardData> {
-  return requestJson<DashboardData>("/api/dashboard");
+export function getDashboard(subjectId?: number): Promise<DashboardData> {
+  const params = subjectId == null ? "" : `?subject_id=${subjectId}`;
+  return requestJson<DashboardData>(`/api/dashboard${params}`);
 }
 
-export function getDecisionPlan(availableMinutes = 60, maximumActions = 3): Promise<DecisionPlan> {
+export function getDecisionPlan(availableMinutes = 60, maximumActions = 3, subjectId?: number): Promise<DecisionPlan> {
   const params = new URLSearchParams({
     available_minutes: String(availableMinutes),
     maximum_actions: String(maximumActions),
   });
+  if (subjectId != null) {
+    params.set("subject_id", String(subjectId));
+  }
   return requestJson<DecisionPlan>(`/api/decision-plan?${params.toString()}`);
 }

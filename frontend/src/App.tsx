@@ -1,6 +1,8 @@
 import React from "react";
 import Dashboard from "./components/Dashboard";
 import Layout, { SectionId } from "./components/Layout";
+import SubjectsPage from "./pages/SubjectsPage";
+import SubjectDetailPage from "./pages/SubjectDetailPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -37,11 +39,23 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
 
 export default function App() {
   const [section, setSection] = React.useState<SectionId>("dashboard");
+  const [selectedSubjectId, setSelectedSubjectId] = React.useState<number | null>(null);
+
+  const selectSection = (nextSection: SectionId) => {
+    setSection(nextSection);
+    if (nextSection !== "subjects") setSelectedSubjectId(null);
+  };
 
   return (
-    <Layout active={section} onSection={setSection}>
+    <Layout active={section} onSection={selectSection}>
       {section === "dashboard" ? (
         <Dashboard />
+      ) : section === "subjects" ? (
+        selectedSubjectId == null ? (
+          <SubjectsPage onSelect={setSelectedSubjectId} />
+        ) : (
+          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} />
+        )
       ) : (
         <section className="uc-page-shell uc-placeholder">
           <p className="uc-eyebrow">{sectionCopy[section].eyebrow}</p>
