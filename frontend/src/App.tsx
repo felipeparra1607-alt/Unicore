@@ -10,6 +10,7 @@ import KnowledgePage from "./pages/KnowledgePage";
 import AgentPage from "./pages/AgentPage";
 import JobsPage from "./pages/JobsPage";
 import SettingsPage from "./pages/SettingsPage";
+import GoalsPage from "./pages/GoalsPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -26,6 +27,11 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
     eyebrow: "Estudio",
     title: "Sesiones, quizzes y constancia",
     body: "Aquí vivirán las sesiones de estudio, los modos de aprendizaje, los quizzes y el historial de actividad.",
+  },
+  goals: {
+    eyebrow: "Objetivos",
+    title: "Progreso académico",
+    body: "Define el rumbo de tu trabajo académico.",
   },
   knowledge: {
     eyebrow: "Conocimiento",
@@ -82,6 +88,8 @@ export default function App() {
         <TasksPage />
       ) : section === "study" ? (
         <StudyPage />
+      ) : section === "goals" ? (
+        <GoalsPage />
       ) : section === "knowledge" ? (
         <KnowledgePage />
       ) : section === "agent" ? (
