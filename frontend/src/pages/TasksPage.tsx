@@ -23,7 +23,7 @@ function priorityLabel(value: number) {
 export default function TasksPage() {
   const [data, setData] = useState<TasksData | null>(null);
   const [plan, setPlan] = useState<DecisionPlan | null>(null);
-  const [duration, setDuration] = useState(60);
+  const [duration, setDuration] = useState(() => Number(window.localStorage.getItem("unicore-plan-duration")) || 60);
   const [scope, setScope] = useState<Scope>("active");
   const [loading, setLoading] = useState(true);
   const [planning, setPlanning] = useState(false);

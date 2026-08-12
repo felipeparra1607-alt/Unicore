@@ -8,6 +8,7 @@ import StudyPage from "./pages/StudyPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import AgentPage from "./pages/AgentPage";
 import JobsPage from "./pages/JobsPage";
+import SettingsPage from "./pages/SettingsPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -76,11 +77,13 @@ export default function App() {
         <AgentPage />
       ) : section === "jobs" ? (
         <JobsPage />
+      ) : section === "settings" ? (
+        <SettingsPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
-          <p className="uc-eyebrow">{sectionCopy[section].eyebrow}</p>
-          <h1>{sectionCopy[section].title}</h1>
-          <p>{sectionCopy[section].body}</p>
+          <p className="uc-eyebrow">{sectionCopy[section as keyof typeof sectionCopy].eyebrow}</p>
+          <h1>{sectionCopy[section as keyof typeof sectionCopy].title}</h1>
+          <p>{sectionCopy[section as keyof typeof sectionCopy].body}</p>
           <div className="uc-placeholder-rule" />
           <span>Se construirá sobre el backend real en los siguientes bloques.</span>
         </section>

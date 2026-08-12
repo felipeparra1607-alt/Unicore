@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import React from "react";
+import { getDashboard, type DashboardData } from "../api";
 
 const sections = [
   { id: "dashboard", label: "Inicio", icon: LayoutDashboard },
@@ -29,16 +30,14 @@ const sections = [
 
 export type SectionId = (typeof sections)[number]["id"];
 type Theme = "light" | "dark";
+type ThemePreference = Theme | "system";
 
-function getInitialTheme(): Theme {
+function getInitialTheme(): ThemePreference {
   const savedTheme = window.localStorage.getItem("unicore-theme");
-  if (savedTheme === "light" || savedTheme === "dark") {
+  if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "system") {
     return savedTheme;
   }
-
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  return "system";
 }
 
 export default function Layout({
@@ -51,12 +50,34 @@ export default function Layout({
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [theme, setTheme] = React.useState<Theme>(getInitialTheme);
+  const [theme, setTheme] = React.useState<ThemePreference>(getInitialTheme);
+  const [resolvedTheme, setResolvedTheme] = React.useState<Theme>("light");
+  const [profile, setProfile] = React.useState<DashboardData["hero"] | null>(null);
 
   React.useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      document.documentElement.dataset.theme = resolved;
+      setResolvedTheme(resolved);
+    };
+    applyTheme();
     window.localStorage.setItem("unicore-theme", theme);
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
   }, [theme]);
+
+  React.useEffect(() => {
+    const applyPreferences = () => {
+      setTheme(getInitialTheme());
+      document.documentElement.dataset.density = window.localStorage.getItem("unicore-density") === "compact" ? "compact" : "comfortable";
+    };
+    applyPreferences();
+    window.addEventListener("unicore-preferences-changed", applyPreferences);
+    return () => window.removeEventListener("unicore-preferences-changed", applyPreferences);
+  }, []);
+
+  React.useEffect(() => { getDashboard().then((data) => setProfile(data.hero)).catch(() => setProfile(null)); }, []);
 
   const selectSection = (section: SectionId) => {
     onSection(section);
@@ -64,7 +85,7 @@ export default function Layout({
   };
 
   const toggleTheme = () => {
-    setTheme((current) => (current === "dark" ? "light" : "dark"));
+    setTheme(resolvedTheme === "dark" ? "light" : "dark");
   };
 
   return (
@@ -102,13 +123,13 @@ export default function Layout({
         <div className="uc-sidebar-foot">
           <div className="uc-mini-level">
             <div className="uc-mini-level-row">
-              <span>Nivel 3</span>
-              <strong>58 XP</strong>
+              <span>{profile ? `Nivel ${profile.level}` : "Nivel —"}</span>
+              <strong>{profile ? `${profile.total_xp} XP` : "— XP"}</strong>
             </div>
             <div className="uc-progress-track compact">
-              <div className="uc-progress-fill" style={{ width: "58%" }} />
+              <div className="uc-progress-fill" style={{ width: `${profile?.level_progress_percentage ?? 0}%` }} />
             </div>
-            <small>42 XP para el siguiente nivel</small>
+            <small>{profile ? `${profile.xp_until_next_level} XP para el siguiente nivel` : "Progreso no disponible"}</small>
           </div>
           <button className="uc-agent-shortcut" onClick={() => selectSection("agent")}>
             <Sparkles size={16} />
@@ -132,11 +153,11 @@ export default function Layout({
           <button
             className="uc-theme-toggle"
             onClick={toggleTheme}
-            aria-label={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
-            title={theme === "dark" ? "Modo claro" : "Modo oscuro"}
+            aria-label={resolvedTheme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
+            title={resolvedTheme === "dark" ? "Modo claro" : "Modo oscuro"}
           >
-            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            <span>{theme === "dark" ? "Claro" : "Oscuro"}</span>
+            {resolvedTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            <span>{resolvedTheme === "dark" ? "Claro" : "Oscuro"}</span>
           </button>
           <div className="uc-topbar-status">
             <span className="uc-status-dot" />
