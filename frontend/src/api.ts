@@ -148,6 +148,19 @@ export type DecisionPlan = {
   scoring_note: string;
 };
 
+export type AcademicTask = {
+  id: number; subject_id: number | null; subject_name: string | null; title: string;
+  description: string | null; task_type: string; status: string; priority: number;
+  due_date: string | null; days_until_due: number | null; is_overdue: boolean;
+  estimated_minutes: number | null; spent_minutes: number; remaining_minutes: number | null;
+  progress_percentage: number; notes: string | null;
+};
+
+export type TasksData = {
+  ok: boolean; count: number;
+  tasks: Array<{ task: AcademicTask; planning: { planning_score: number; urgency_level?: string; reasons?: string[] } }>;
+};
+
 async function requestJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
   if (!response.ok) {
@@ -171,4 +184,9 @@ export function getDecisionPlan(availableMinutes = 60, maximumActions = 3, subje
     params.set("subject_id", String(subjectId));
   }
   return requestJson<DecisionPlan>(`/api/decision-plan?${params.toString()}`);
+}
+
+export function getTasks(subjectId?: number): Promise<TasksData> {
+  const params = subjectId == null ? "" : `?subject_id=${subjectId}`;
+  return requestJson<TasksData>(`/api/tasks${params}`);
 }

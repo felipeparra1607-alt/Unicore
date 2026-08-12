@@ -3,6 +3,7 @@ import Dashboard from "./components/Dashboard";
 import Layout, { SectionId } from "./components/Layout";
 import SubjectsPage from "./pages/SubjectsPage";
 import SubjectDetailPage from "./pages/SubjectDetailPage";
+import TasksPage from "./pages/TasksPage";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -56,6 +57,8 @@ export default function App() {
         ) : (
           <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} />
         )
+      ) : section === "tasks" ? (
+        <TasksPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
           <p className="uc-eyebrow">{sectionCopy[section].eyebrow}</p>

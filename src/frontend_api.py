@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from src.decision_engine import build_decision_plan
+from src.mcp_resources import _build_tasks
 from src.unicore_dashboard import build_dashboard_data
 
 HOST = "127.0.0.1"
@@ -10,12 +11,18 @@ PORT = 8766
 
 
 class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
+    def _allowed_origin(self) -> str:
+        origin = self.headers.get("Origin", "")
+        if origin in {"http://127.0.0.1:5173", "http://localhost:5173"}:
+            return origin
+        return "http://127.0.0.1:5173"
+
     def _send_json(self, payload: dict, status_code: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
+        self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
@@ -23,7 +30,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:5173")
+        self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.end_headers()
@@ -54,6 +61,13 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     subject_id=subject_id,
                     maximum_actions=maximum_actions,
                 )
+                self._send_json(data, 200 if data.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/tasks":
+                subject_value = query.get("subject_id", [None])[0]
+                subject_id = int(subject_value) if subject_value not in (None, "") else None
+                data = _build_tasks(subject_id=subject_id)
                 self._send_json(data, 200 if data.get("ok") else 400)
                 return
 
