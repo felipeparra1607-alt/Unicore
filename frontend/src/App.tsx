@@ -76,7 +76,7 @@ export default function App() {
         selectedSubjectId == null ? (
           <SubjectsPage onSelect={setSelectedSubjectId} />
         ) : (
-          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} />
+          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} />
         )
       ) : section === "tasks" ? (
         <TasksPage />
