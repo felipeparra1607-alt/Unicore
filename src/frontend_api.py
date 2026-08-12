@@ -3,7 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from src.decision_engine import build_decision_plan
-from src.mcp_resources import _build_tasks
+from src.mcp_resources import _build_subject_reviews, _build_subject_study, _build_tasks
 from src.unicore_dashboard import build_dashboard_data
 
 HOST = "127.0.0.1"
@@ -68,6 +68,19 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 subject_value = query.get("subject_id", [None])[0]
                 subject_id = int(subject_value) if subject_value not in (None, "") else None
                 data = _build_tasks(subject_id=subject_id)
+                self._send_json(data, 200 if data.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/study":
+                subject_value = query.get("subject_id", [None])[0]
+                if subject_value in (None, ""):
+                    self._send_json({"ok": False, "error": "subject_id es obligatorio"}, 400)
+                    return
+                subject_id = int(subject_value)
+                data = _build_subject_study(subject_id)
+                if data.get("ok"):
+                    reviews = _build_subject_reviews(subject_id)
+                    data["reviews"] = reviews if reviews.get("ok") else None
                 self._send_json(data, 200 if data.get("ok") else 400)
                 return
 

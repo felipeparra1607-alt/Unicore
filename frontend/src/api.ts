@@ -161,6 +161,25 @@ export type TasksData = {
   tasks: Array<{ task: AcademicTask; planning: { planning_score: number; urgency_level?: string; reasons?: string[] } }>;
 };
 
+export type StudySession = {
+  id: number; subject_id: number; subject_name: string | null; session_date: string;
+  duration_minutes: number; activity_type: string; topic: string | null; completed_plan: boolean;
+  focus_rating: number | null; difficulty_rating: number | null; satisfaction_rating: number | null;
+};
+
+export type QuizAttempt = {
+  id: number; subject_id: number; topic: string; study_mode: string; difficulty: string;
+  total_questions: number; correct_answers: number | null; score_percentage: number | null;
+  status: string; started_at: string | null; completed_at: string | null;
+};
+
+export type StudyData = {
+  ok: boolean; subject: { id: number; name: string }; available_study_modes: string[];
+  summary: { study_session_count: number; total_study_minutes: number; quiz_attempt_count: number; completed_quiz_count: number; quiz_average_percentage: number | null };
+  recent_attempts: QuizAttempt[]; recent_study_sessions: StudySession[];
+  reviews: { ok: boolean; count: number; due_count: number; reviews: Array<{ id: number; topic: string; status: string; next_review_at: string; priority: number }> } | null;
+};
+
 async function requestJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`);
   if (!response.ok) {
@@ -189,4 +208,8 @@ export function getDecisionPlan(availableMinutes = 60, maximumActions = 3, subje
 export function getTasks(subjectId?: number): Promise<TasksData> {
   const params = subjectId == null ? "" : `?subject_id=${subjectId}`;
   return requestJson<TasksData>(`/api/tasks${params}`);
+}
+
+export function getStudy(subjectId: number): Promise<StudyData> {
+  return requestJson<StudyData>(`/api/study?subject_id=${subjectId}`);
 }
