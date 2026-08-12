@@ -10,11 +10,14 @@ import {
   Trophy,
 } from "lucide-react";
 import {
+  getAssessments,
   getDashboard,
   getDecisionPlan,
+  type Assessment,
   type DashboardData,
   type DecisionPlan,
 } from "../api";
+import AssessmentCalendar from "./AssessmentCalendar";
 import Card from "./Card";
 import {
   GradeTrendChart,
@@ -57,6 +60,9 @@ export default function Dashboard() {
   const [plan, setPlan] = useState<DecisionPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [assessmentsLoading, setAssessmentsLoading] = useState(false);
 
   async function loadDashboard() {
     setLoading(true);
@@ -78,6 +84,18 @@ export default function Dashboard() {
   useEffect(() => {
     void loadDashboard();
   }, []);
+
+  const openCalendar = async () => {
+    setCalendarOpen(true);
+    if (assessments.length) return;
+    setAssessmentsLoading(true);
+    try {
+      const response = await getAssessments();
+      setAssessments(response.assessments);
+    } finally {
+      setAssessmentsLoading(false);
+    }
+  };
 
   const mainSubject = data?.subjects[0] ?? null;
   const readiness = data?.next_boss?.readiness_percentage ?? null;
@@ -129,12 +147,12 @@ export default function Dashboard() {
             Prioridades, preparación y progreso real. UniCore calcula el estado a partir de tus datos académicos locales.
           </p>
         </div>
-        <div className="uc-date-chip">
+        <button className="uc-date-chip uc-button-chip" onClick={() => void openCalendar()} aria-haspopup="dialog" aria-expanded={calendarOpen}>
           <CalendarDays size={16} />
           {data.next_assessment
             ? `${daysLabel(data.next_assessment.days_remaining)} para ${data.next_assessment.title}`
             : "Sin evaluación próxima"}
-        </div>
+        </button>
       </header>
 
       <section className="uc-dashboard-grid uc-dashboard-grid-top">
@@ -155,7 +173,7 @@ export default function Dashboard() {
               <p>{topAction?.reasons?.join(" ") ?? "Puedes usar este tiempo para repasar, organizar materiales o adelantar trabajo."}</p>
             </div>
             {topAction ? (
-              <button className="uc-primary-action">
+              <button className="uc-primary-action" disabled title="Disponible al integrar sesiones de estudio">
                 Empezar bloque de {topAction.allocated_minutes} min <ArrowRight size={17} />
               </button>
             ) : null}
@@ -240,13 +258,11 @@ export default function Dashboard() {
           </div>
         </Card>
 
-        <Card eyebrow="Gamificación" title="Misiones de hoy" className="uc-week-goals">
+        <Card title="Misiones de hoy" className="uc-week-goals">
           {data.missions.items.length === 0 ? (
-            <div className="uc-action-row muted">
-              <div className="uc-action-main">
-                <strong>No hay misiones generadas para hoy</strong>
-                <span>Cuando existan, su progreso y recompensa XP aparecerán aquí.</span>
-              </div>
+            <div className="uc-missions-empty">
+              <strong>No hay misiones para hoy.</strong>
+              <p>Cuando UniCore genere nuevos objetivos, aparecerán aquí junto con su progreso y recompensa de XP.</p>
             </div>
           ) : data.missions.items.slice(0, 3).map((mission) => {
             const percentage = mission.target_value > 0
@@ -310,6 +326,7 @@ export default function Dashboard() {
           ))}
         </div>
       </section>
+      {calendarOpen && <AssessmentCalendar assessments={assessments} loading={assessmentsLoading} onClose={() => setCalendarOpen(false)} />}
     </div>
   );
 }

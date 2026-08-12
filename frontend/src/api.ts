@@ -230,6 +230,21 @@ export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
   return requestJson<KnowledgeData>(`/api/subjects/${subjectId}/knowledge`);
 }
 
+export type Assessment = {
+  id: number;
+  subject_id: number;
+  subject_name: string | null;
+  title: string;
+  assessment_type: string;
+  assessment_date: string | null;
+  weight_percentage: number | null;
+  status: string;
+};
+
+export function getAssessments(): Promise<{ ok: boolean; assessments: Assessment[] }> {
+  return requestJson("/api/assessments");
+}
+
 export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; job?: { status: string; kind: string; objective: string; created_at: string } };
 
 export function sendAgentMessage(message: string, conversationId?: string): Promise<AgentResponse> {

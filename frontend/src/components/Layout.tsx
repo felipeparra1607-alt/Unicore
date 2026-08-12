@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   Menu,
   Moon,
-  Search,
   Settings,
   Sparkles,
   Sun,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 import React from "react";
 import { getDashboard, type DashboardData } from "../api";
+import GlobalSearch, { type SearchDestination } from "./GlobalSearch";
 
 const sections = [
   { id: "dashboard", label: "Inicio", icon: LayoutDashboard },
@@ -43,10 +43,12 @@ function getInitialTheme(): ThemePreference {
 export default function Layout({
   active,
   onSection,
+  onSearchNavigate,
   children,
 }: {
   active: SectionId;
   onSection: (section: SectionId) => void;
+  onSearchNavigate: (destination: SearchDestination) => void;
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -145,11 +147,7 @@ export default function Layout({
           <button className="uc-mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
             <Menu size={19} />
           </button>
-          <div className="uc-search">
-            <Search size={16} />
-            <span>Buscar asignaturas, tareas o conceptos</span>
-            <kbd>⌘ K</kbd>
-          </div>
+          <GlobalSearch onNavigate={onSearchNavigate} />
           <button
             className="uc-theme-toggle"
             onClick={toggleTheme}
@@ -159,10 +157,6 @@ export default function Layout({
             {resolvedTheme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             <span>{resolvedTheme === "dark" ? "Claro" : "Oscuro"}</span>
           </button>
-          <div className="uc-topbar-status">
-            <span className="uc-status-dot" />
-            Backend listo
-          </div>
         </header>
         <main className="uc-content">{children}</main>
       </div>

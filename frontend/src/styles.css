@@ -279,12 +279,23 @@ a:focus-visible {
 
 .uc-search {
   display: flex;
-  width: min(520px, 60vw);
+  width: 100%;
   align-items: center;
   gap: 9px;
   color: var(--text-faint);
   font-size: 12px;
 }
+
+.uc-global-search { position: relative; width: min(520px, 60vw); }
+.uc-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; }
+.uc-search input::placeholder { color: var(--text-faint); opacity: 1; }
+.uc-search > button { display: grid; place-items: center; padding: 2px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.uc-search-panel { position: absolute; top: calc(100% + 11px); left: 0; z-index: 60; width: min(620px, calc(100vw - 42px)); max-height: min(560px, calc(100vh - 88px)); overflow: auto; border: 1px solid var(--border-strong); background: var(--surface-raised); box-shadow: 0 18px 42px var(--shadow); }
+.uc-search-group { padding: 9px 0; border-bottom: 1px solid var(--border); }.uc-search-group:last-child { border-bottom: 0; }
+.uc-search-group > p, .uc-search-state { margin: 0; padding: 5px 14px; color: var(--text-muted); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.uc-search-state { padding: 18px 14px; text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; }
+.uc-search-group button { display: block; width: 100%; padding: 9px 14px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }.uc-search-group button.is-active, .uc-search-group button:hover { background: var(--surface-muted); }.uc-search-group button strong, .uc-search-group button span { display: block; }.uc-search-group button strong { color: var(--text-primary); font-size: 12px; }.uc-search-group button span { margin-top: 2px; color: var(--text-muted); font-size: 10px; }
+.uc-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 .uc-search kbd {
   margin-left: auto;
@@ -360,6 +371,7 @@ a:focus-visible {
   white-space: nowrap;
   font-size: 11px;
 }
+.uc-button-chip { background: transparent; cursor: pointer; }.uc-button-chip:hover { border-color: var(--border-strong); color: var(--text-primary); }
 
 .uc-dashboard-grid {
   display: grid;
@@ -729,6 +741,7 @@ a:focus-visible {
 .uc-week-goals .uc-progress-track {
   margin-top: 7px;
 }
+.uc-missions-empty { border-top: 1px solid var(--border); padding: 15px 2px 17px; }.uc-missions-empty strong { color: var(--text-primary); font-size: 12px; }.uc-missions-empty p { max-width: 470px; margin: 6px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.55; }
 
 .uc-activity-strip {
   display: flex;
@@ -1031,6 +1044,12 @@ a:focus-visible {
   line-height: 1.55;
 }
 
+.uc-calendar-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 22px; background: var(--overlay); }
+.uc-calendar-modal { width: min(880px, 100%); max-height: min(720px, calc(100vh - 44px)); overflow: auto; border: 1px solid var(--border-strong); background: var(--surface-raised); box-shadow: 0 24px 60px var(--shadow); padding: 24px; }
+.uc-calendar-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); padding-bottom: 17px; }.uc-calendar-modal h2 { margin: 5px 0 0; color: var(--text-primary); font-family: Georgia, "Times New Roman", serif; font-size: 26px; font-weight: 500; letter-spacing: -.03em; }.uc-calendar-modal > header > button, .uc-calendar-month-head button { display: grid; place-items: center; background: transparent; color: var(--text-secondary); cursor: pointer; }.uc-calendar-modal > header > button { padding: 4px; }
+.uc-calendar-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(230px, .8fr); gap: 24px; padding-top: 21px; }.uc-calendar-month-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; color: var(--text-primary); font-size: 12px; text-transform: capitalize; }.uc-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }.uc-calendar-grid > span { padding: 4px 0 7px; color: var(--text-muted); text-align: center; font-size: 9px; font-weight: 800; }.uc-calendar-grid > button { position: relative; min-height: 39px; background: transparent; color: var(--text-secondary); font-size: 11px; cursor: default; }.uc-calendar-grid > button:not(:disabled) { cursor: pointer; }.uc-calendar-grid > button.has-events { color: var(--text-primary); font-weight: 800; background: var(--surface-muted); }.uc-calendar-grid > button.is-selected { outline: 1px solid var(--text-primary); outline-offset: -1px; }.uc-calendar-grid i { position: absolute; right: 7px; bottom: 6px; width: 4px; height: 4px; background: var(--accent); border-radius: 50%; }
+.uc-calendar-layout aside { border-left: 1px solid var(--border); padding-left: 24px; }.uc-calendar-layout aside > article { padding: 9px 0; border-bottom: 1px solid var(--border); }.uc-calendar-layout article strong, .uc-calendar-layout article span, .uc-calendar-layout article small { display: block; }.uc-calendar-layout article strong { color: var(--text-primary); font-size: 12px; }.uc-calendar-layout article span, .uc-calendar-layout article small { margin-top: 3px; color: var(--text-muted); font-size: 10px; }.uc-calendar-empty { margin: 12px 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }.uc-upcoming-list { margin-top: 20px; }.uc-upcoming-list > button { display: grid; width: 100%; grid-template-columns: 72px 1fr; gap: 3px 8px; border-top: 1px solid var(--border); padding: 9px 0; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }.uc-upcoming-list > button:hover strong { text-decoration: underline; }.uc-upcoming-list button span { grid-row: span 2; color: var(--text-muted); font-size: 9px; }.uc-upcoming-list button strong { color: var(--text-primary); font-size: 11px; }.uc-upcoming-list button small { color: var(--text-muted); font-size: 9px; }.uc-calendar-state { margin: 0; padding: 28px 0 5px; color: var(--text-muted); font-size: 12px; }
+
 @media (max-width: 1120px) {
   .uc-dashboard-grid-top,
   .uc-dashboard-grid-charts,
@@ -1075,6 +1094,8 @@ a:focus-visible {
 }
 
 @media (max-width: 860px) {
+  .uc-global-search { width: auto; flex: 1; }.uc-search-panel { left: -44px; width: calc(100vw - 36px); }
+  .uc-calendar-layout { grid-template-columns: 1fr; }.uc-calendar-layout aside { border-top: 1px solid var(--border); border-left: 0; padding: 20px 0 0; }
   .uc-sidebar {
     transform: translateX(-100%);
     transition: transform 180ms ease;
@@ -1177,6 +1198,7 @@ a:focus-visible {
 }
 
 @media (max-width: 560px) {
+  .uc-calendar-backdrop { align-items: end; padding: 0; }.uc-calendar-modal { max-height: calc(100vh - 20px); padding: 19px 16px; }.uc-calendar-modal h2 { font-size: 23px; }.uc-calendar-grid > button { min-height: 35px; }.uc-upcoming-list > button { grid-template-columns: 65px 1fr; }
   .uc-page-intro h1 {
     font-size: 38px;
   }

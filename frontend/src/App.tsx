@@ -1,6 +1,7 @@
 import React from "react";
 import Dashboard from "./components/Dashboard";
 import Layout, { SectionId } from "./components/Layout";
+import type { SearchDestination } from "./components/GlobalSearch";
 import SubjectsPage from "./pages/SubjectsPage";
 import SubjectDetailPage from "./pages/SubjectDetailPage";
 import TasksPage from "./pages/TasksPage";
@@ -57,8 +58,18 @@ export default function App() {
     if (nextSection !== "subjects") setSelectedSubjectId(null);
   };
 
+  const handleSearchNavigate = (destination: SearchDestination) => {
+    if (destination.kind === "subject") {
+      setSelectedSubjectId(destination.subjectId);
+      setSection("subjects");
+      return;
+    }
+    setSelectedSubjectId(null);
+    setSection(destination.kind === "task" ? "tasks" : "knowledge");
+  };
+
   return (
-    <Layout active={section} onSection={selectSection}>
+    <Layout active={section} onSection={selectSection} onSearchNavigate={handleSearchNavigate}>
       {section === "dashboard" ? (
         <Dashboard />
       ) : section === "subjects" ? (

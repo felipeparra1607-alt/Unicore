@@ -6,7 +6,12 @@ from urllib.parse import parse_qs, urlparse
 from src.decision_engine import build_decision_plan
 from src.knowledge_map import build_subject_knowledge_map
 from src.jobs import get_job, list_jobs
-from src.mcp_resources import _build_subject_reviews, _build_subject_study, _build_tasks
+from src.mcp_resources import (
+    _build_subject_assessments,
+    _build_subject_reviews,
+    _build_subject_study,
+    _build_tasks,
+)
 from src.runtime_context import build_runtime_context
 from src.unicore_dashboard import build_dashboard_data
 from src.unicore_agent import UniCoreAgent
@@ -95,6 +100,33 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     maximum_actions=maximum_actions,
                 )
                 self._send_json(data, 200 if data.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/assessments":
+                dashboard = build_dashboard_data()
+                if not dashboard.get("ok"):
+                    self._send_json(dashboard, 400)
+                    return
+
+                assessments = []
+                for subject in dashboard.get("subjects", []):
+                    subject_data = _build_subject_assessments(subject["id"])
+                    if subject_data.get("ok"):
+                        assessments.extend(
+                            {
+                                "id": assessment["id"],
+                                "subject_id": assessment["subject_id"],
+                                "subject_name": assessment.get("subject_name"),
+                                "title": assessment["title"],
+                                "assessment_type": assessment["assessment_type"],
+                                "assessment_date": assessment["assessment_date"],
+                                "weight_percentage": assessment["weight_percentage"],
+                                "status": assessment["status"],
+                            }
+                            for assessment in subject_data.get("assessments", [])
+                        )
+
+                self._send_json({"ok": True, "assessments": assessments})
                 return
 
             if parsed.path == "/api/tasks":
