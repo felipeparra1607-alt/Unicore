@@ -2,12 +2,30 @@ import asyncio
 import base64
 import binascii
 import json
+import os
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
+from src.agent_context import build_selective_agent_context
+from src.conversation_memory import (
+    append_message,
+    build_memory_context,
+    create_conversation,
+    delete_conversation,
+    ensure_conversation,
+    get_conversation,
+    list_conversations,
+    refresh_summary_if_needed,
+)
+from src.database.migrate_conversations import migrate_conversations
 from src.decision_engine import build_decision_plan
+from src.document_library import (
+    get_document_content,
+    get_document_file,
+    ingest_document_bytes,
+)
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
 from src.knowledge_map import build_subject_knowledge_map
 from src.jobs import get_job, list_jobs
@@ -25,7 +43,7 @@ from src.unicore_agent import UniCoreAgent, extract_json_object
 from src.unicore_client import UniCoreMCPClient
 
 HOST = "127.0.0.1"
-PORT = 8766
+PORT = int(os.getenv("UNICORE_FRONTEND_PORT", "8766"))
 
 
 class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
@@ -56,7 +74,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -64,8 +82,21 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
         self.end_headers()
+
+    def _send_file(self, path: Path, media_type: str, title: str) -> None:
+        body = path.read_bytes()
+        safe_title = " ".join(title.replace('"', "").split()) or "material"
+        download_name = safe_title if Path(safe_title).suffix else safe_title + path.suffix.lower()
+        self.send_response(200)
+        self.send_header("Content-Type", media_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(download_name)}")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Access-Control-Allow-Origin", self._allowed_origin())
+        self.end_headers()
+        self.wfile.write(body)
 
     def _read_json(self, maximum_bytes: int = 65536) -> dict:
         content_length = int(self.headers.get("Content-Length", "0"))
@@ -301,6 +332,42 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(data, 200 if data.get("ok") else 404)
                 return
 
+            if parsed.path == "/api/conversations":
+                limit = int(query.get("limit", ["40"])[0])
+                conversations = list_conversations(limit=limit)
+                self._send_json({"ok": True, "count": len(conversations), "conversations": conversations})
+                return
+
+            if parsed.path.startswith("/api/conversations/"):
+                conversation_id = parsed.path.removeprefix("/api/conversations/").strip()
+                conversation = get_conversation(conversation_id)
+                if conversation is None:
+                    self._send_json({"ok": False, "error": "La conversación no existe"}, 404)
+                    return
+                self._send_json({"ok": True, "conversation": conversation})
+                return
+
+            if parsed.path.startswith("/api/documents/"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) not in {3, 4}:
+                    self._send_json({"ok": False, "error": "Ruta de material inválida"}, 404)
+                    return
+                document_id = int(path_parts[2])
+                if len(path_parts) == 4 and path_parts[3] == "file":
+                    file_result = get_document_file(document_id)
+                    if file_result is None:
+                        self._send_json({"ok": False, "error": "El archivo original no está disponible"}, 404)
+                        return
+                    self._send_file(*file_result)
+                    return
+                if len(path_parts) == 3:
+                    document = get_document_content(document_id)
+                    if document is None:
+                        self._send_json({"ok": False, "error": "El material no existe"}, 404)
+                        return
+                    self._send_json(document)
+                    return
+
             if parsed.path == "/api/jobs":
                 status = query.get("status", [None])[0]
                 limit = int(query.get("limit", ["50"])[0])
@@ -382,30 +449,93 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 return
 
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/materials"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 4:
+                    self._send_json({"ok": False, "error": "Ruta de materiales inválida"}, 404)
+                    return
+                subject_id = int(path_parts[2])
+                payload = self._read_json(maximum_bytes=12 * 1024 * 1024)
+                encoded_content = payload.get("content_base64")
+                if not isinstance(encoded_content, str) or not encoded_content:
+                    raise ValueError("El archivo está vacío")
+                try:
+                    file_content = base64.b64decode(encoded_content, validate=True)
+                except (binascii.Error, ValueError) as error:
+                    raise ValueError("No se pudo leer el archivo") from error
+                result = ingest_document_bytes(
+                    file_name=str(payload.get("file_name", "")),
+                    content=file_content,
+                    subject_id=subject_id,
+                    title=payload.get("title"),
+                )
+                self._send_json(result, 200 if result.get("duplicate") else 201)
+                return
+
+            if parsed.path == "/api/conversations":
+                payload = self._read_json()
+                conversation = create_conversation(
+                    title=payload.get("title"),
+                    subject_id=payload.get("subject_id"),
+                    document_id=payload.get("document_id"),
+                    context_type=payload.get("context_type"),
+                )
+                self._send_json({"ok": True, "conversation": conversation}, 201)
+                return
+
             if parsed.path == "/api/agent/message":
                 payload = self._read_json()
                 message = str(payload.get("message", "")).strip()
                 if not message:
                     self._send_json({"ok": False, "error": "Escribe un mensaje para UniCore"}, 400)
                     return
-                runtime_context = build_runtime_context(
+                conversation = ensure_conversation(
                     conversation_id=payload.get("conversation_id"),
+                    first_message=message,
+                    subject_id=payload.get("subject_id"),
+                    document_id=payload.get("document_id"),
+                    context_type=payload.get("context_type"),
+                )
+                memory = build_memory_context(conversation["id"])
+                selected_context = build_selective_agent_context(
+                    message=message,
+                    memory=memory,
+                    subject_id=conversation.get("subject_id"),
+                    document_id=conversation.get("document_id"),
+                    work_context=payload.get("work_context"),
+                )
+                append_message(conversation["id"], "user", message)
+                runtime_context = build_runtime_context(
+                    conversation_id=conversation["id"],
                     allow_writes=False,
                 )
                 agent = UniCoreAgent(
                     maximum_steps=4,
-                    maximum_output_tokens=600,
+                    maximum_output_tokens=500,
                     runtime_context=runtime_context,
                 )
-                result = asyncio.run(agent.run(message))
+                result = asyncio.run(agent.run(message, supplemental_context=selected_context["context"]))
+                assistant_text = result.get("answer")
+                job = result.get("job")
+                if not assistant_text and isinstance(job, dict):
+                    assistant_text = f"He preparado un análisis en segundo plano: {job.get('objective')}. Puedes seguirlo en Jobs."
+                if result.get("ok") and assistant_text:
+                    append_message(
+                        conversation["id"],
+                        "assistant",
+                        str(assistant_text),
+                        sources=selected_context["sources"],
+                    )
+                    refresh_summary_if_needed(conversation["id"])
                 response = {
                     "ok": bool(result.get("ok")),
-                    "answer": result.get("answer"),
+                    "answer": assistant_text,
                     "status": result.get("status", "completed" if result.get("ok") else "error"),
                     "conversation_id": runtime_context.conversation_id,
                     "error": result.get("error"),
+                    "sources": selected_context["sources"],
+                    "context_usage": selected_context["retrieval"],
                 }
-                job = result.get("job")
                 if isinstance(job, dict):
                     response["job"] = {
                         "status": job.get("status"),
@@ -462,11 +592,27 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         except Exception:
             self._send_json({"ok": False, "error": "No se pudo guardar el objetivo de nota"}, 500)
 
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path.startswith("/api/conversations/"):
+                conversation_id = parsed.path.removeprefix("/api/conversations/").strip()
+                deleted = delete_conversation(conversation_id)
+                if not deleted:
+                    self._send_json({"ok": False, "error": "La conversación no existe"}, 404)
+                    return
+                self._send_json({"ok": True})
+                return
+            self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
+        except Exception:
+            self._send_json({"ok": False, "error": "No se pudo eliminar la conversación"}, 500)
+
     def log_message(self, format, *args):
         return
 
 
 def main() -> None:
+    migrate_conversations()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)
     print()
     print("UniCore Frontend API")

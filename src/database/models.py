@@ -175,6 +175,83 @@ class DocumentChunk(Base):
     )
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(
+        String(80),
+        primary_key=True,
+    )
+    title: Mapped[str] = mapped_column(
+        String(180),
+        nullable=False,
+    )
+    context_type: Mapped[str] = mapped_column(
+        String(30),
+        default="general",
+        nullable=False,
+    )
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"),
+        index=True,
+    )
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id"),
+        index=True,
+    )
+    summary: Mapped[str | None] = mapped_column(Text)
+    summarized_message_count: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    messages: Mapped[list["ConversationMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationMessage.id",
+    )
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+    sources_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    conversation: Mapped["Conversation"] = relationship(
+        back_populates="messages",
+    )
+
+
 class ClassSession(Base):
     __tablename__ = "class_sessions"
 

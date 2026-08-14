@@ -107,6 +107,7 @@ def retrieve_ranked_chunks(
     query: str,
     subject_id: int | None,
     semantic_weight: float,
+    document_id: int | None = None,
 ) -> list[RankedChunk]:
     """Recupera y ordena todos los chunks compatibles."""
 
@@ -128,6 +129,11 @@ def retrieve_ranked_chunks(
         if subject_id is not None:
             statement = statement.where(
                 Document.subject_id == subject_id
+            )
+
+        if document_id is not None:
+            statement = statement.where(
+                Document.id == document_id
             )
 
         rows = session.execute(statement).all()
@@ -463,6 +469,7 @@ def register_rag_tools(mcp) -> None:
     def build_rag_context(
         query: str,
         subject_id: int | None = None,
+        document_id: int | None = None,
         maximum_sources: int = 5,
         maximum_context_characters: int = 6000,
         minimum_score: float = 0.20,
@@ -537,6 +544,7 @@ def register_rag_tools(mcp) -> None:
                 query=clean_query,
                 subject_id=subject_id,
                 semantic_weight=semantic_weight,
+                document_id=document_id,
             )
         except Exception as error:
             return {
@@ -604,6 +612,7 @@ def register_rag_tools(mcp) -> None:
             "ok": True,
             "query": clean_query,
             "subject_id": subject_id,
+            "document_id": document_id,
             "retrieval_type": "hybrid",
             "source_count": len(sources),
             "context_characters": len(context),

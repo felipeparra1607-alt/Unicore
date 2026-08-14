@@ -135,6 +135,7 @@ def register_model_answer_tools(mcp) -> None:
     def answer_with_model(
         query: str,
         subject_id: int | None = None,
+        document_id: int | None = None,
         provider: str | None = None,
         maximum_sources: int = 5,
         maximum_context_characters: int = 6000,
@@ -211,6 +212,7 @@ def register_model_answer_tools(mcp) -> None:
                 query=clean_query,
                 subject_id=subject_id,
                 semantic_weight=semantic_weight,
+                document_id=document_id,
             )
 
             selected_chunks = select_context_chunks(

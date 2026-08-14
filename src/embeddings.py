@@ -42,12 +42,19 @@ def create_embeddings(texts: list[str]) -> list[list[float]]:
 def create_embedding(text: str) -> list[float]:
     """Genera el embedding normalizado de un texto."""
 
+    return list(_create_embedding_cached(text))
+
+
+@lru_cache(maxsize=128)
+def _create_embedding_cached(text: str) -> tuple[float, ...]:
+    """Reutiliza embeddings de consultas idénticas dentro del proceso."""
+
     embeddings = create_embeddings([text])
 
     if not embeddings:
-        return []
+        return ()
 
-    return embeddings[0]
+    return tuple(embeddings[0])
 
 
 def embedding_to_json(embedding: list[float]) -> str:
