@@ -56,7 +56,7 @@ function weekdayLetter(value: string) {
   return ({ Mon: "L", Tue: "M", Wed: "X", Thu: "J", Fri: "V", Sat: "S", Sun: "D" } as Record<string, string>)[value] ?? value;
 }
 
-export default function Dashboard({ onRequestWorkBlock }: { onRequestWorkBlock: (action: DecisionAction) => void }) {
+export default function Dashboard({ onRequestWorkBlock, onOpenSubjects }: { onRequestWorkBlock: (action: DecisionAction) => void; onOpenSubjects: () => void }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [plan, setPlan] = useState<DecisionPlan | null>(null);
   const [loading, setLoading] = useState(true);
@@ -296,7 +296,7 @@ export default function Dashboard({ onRequestWorkBlock }: { onRequestWorkBlock: 
       <section className="uc-subject-section">
         <div className="uc-section-heading">
           <div><p className="uc-eyebrow">Asignaturas</p><h2>Estado académico</h2></div>
-          <button className="uc-text-action">Ver todas <ArrowRight size={15} /></button>
+          <button className="uc-text-action" onClick={onOpenSubjects}>Ver todas <ArrowRight size={15} /></button>
         </div>
 
         <div className="uc-subject-table">

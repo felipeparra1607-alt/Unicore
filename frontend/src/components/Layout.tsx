@@ -47,11 +47,13 @@ export default function Layout({
   onSection,
   onSearchNavigate,
   children,
+  focusMode = false,
 }: {
   active: SectionId;
   onSection: (section: SectionId) => void;
   onSearchNavigate: (destination: SearchDestination) => void;
   children: React.ReactNode;
+  focusMode?: boolean;
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [theme, setTheme] = React.useState<ThemePreference>(getInitialTheme);
@@ -93,8 +95,8 @@ export default function Layout({
   };
 
   return (
-    <div className="uc-app">
-      <aside className={`uc-sidebar ${mobileOpen ? "is-open" : ""}`}>
+    <div className={`uc-app ${focusMode ? "is-focus-mode" : ""}`}>
+      <aside className={`uc-sidebar ${focusMode ? "is-focus-drawer" : ""} ${mobileOpen ? "is-open" : ""}`}>
         <div className="uc-brand">
           <div className="uc-brand-mark">U</div>
           <div>
@@ -145,11 +147,11 @@ export default function Layout({
       {mobileOpen && <button className="uc-overlay" aria-label="Cerrar menú" onClick={() => setMobileOpen(false)} />}
 
       <div className="uc-main-column">
-        <header className="uc-topbar">
-          <button className="uc-mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
+        <header className={`uc-topbar ${focusMode ? "is-focus-topbar" : ""}`}>
+          <button className={`uc-mobile-menu ${focusMode ? "is-focus-menu" : ""}`} onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
             <Menu size={19} />
           </button>
-          <GlobalSearch onNavigate={onSearchNavigate} />
+          {!focusMode && <GlobalSearch onNavigate={onSearchNavigate} />}
           <button
             className="uc-theme-toggle"
             onClick={toggleTheme}

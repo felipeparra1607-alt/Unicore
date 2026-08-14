@@ -12,6 +12,8 @@ export type StoredWorkSession = WorkSessionSeed & {
   deadline: number | null;
   remainingMs: number;
   running: boolean;
+  conversationId?: string;
+  activeDocumentId?: number | null;
 };
 
 export const WORK_SESSION_STORAGE_KEY = "unicore-active-work-session";

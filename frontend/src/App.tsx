@@ -13,7 +13,7 @@ import SettingsPage from "./pages/SettingsPage";
 import GoalsPage from "./pages/GoalsPage";
 import WorkSessionPage from "./pages/WorkSessionPage";
 import WorkBlockDialog from "./components/WorkBlockDialog";
-import type { DecisionAction } from "./api";
+import type { DecisionAction, SubjectDocumentsData } from "./api";
 import { WORK_SESSION_STORAGE_KEY, type StoredWorkSession } from "./workSession";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
@@ -63,6 +63,7 @@ export default function App() {
   const [section, setSection] = React.useState<SectionId>("dashboard");
   const [selectedSubjectId, setSelectedSubjectId] = React.useState<number | null>(null);
   const [pendingWorkAction, setPendingWorkAction] = React.useState<DecisionAction | null>(null);
+  const [agentLaunchContext, setAgentLaunchContext] = React.useState<{ subjectId: number; subjectName: string; documentId?: number; documentTitle?: string } | null>(null);
   const [workSession, setWorkSession] = React.useState<StoredWorkSession | null>(() => {
     try {
       const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
@@ -75,9 +76,12 @@ export default function App() {
 
   const selectSection = (nextSection: SectionId) => {
     if (workSession) {
-      window.alert("Hay un bloque de trabajo activo. Finalízalo antes de cambiar de sección; el cronómetro está protegido.");
-      return;
+      const leave = window.confirm("Hay un bloque activo. Si cambias de sección se cerrará sin registrar. ¿Quieres salir del modo foco?");
+      if (!leave) return;
+      window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
+      setWorkSession(null);
     }
+    if (nextSection === "agent") setAgentLaunchContext(null);
     setSection(nextSection);
     if (nextSection !== "subjects") setSelectedSubjectId(null);
   };
@@ -122,17 +126,22 @@ export default function App() {
     setSection("dashboard");
   };
 
+  const openDocumentInAgent = (document: SubjectDocumentsData["documents"][number], subjectName: string) => {
+    setAgentLaunchContext({ subjectId: document.subject_id!, subjectName, documentId: document.id, documentTitle: document.title });
+    setSection("agent");
+  };
+
   return (
-    <Layout active={section} onSection={selectSection} onSearchNavigate={handleSearchNavigate}>
+    <Layout active={section} onSection={selectSection} onSearchNavigate={handleSearchNavigate} focusMode={Boolean(workSession)}>
       {workSession ? (
         <WorkSessionPage session={workSession} onChange={updateWorkSession} onClose={closeWorkSession} />
       ) : section === "dashboard" ? (
-        <Dashboard onRequestWorkBlock={setPendingWorkAction} />
+        <Dashboard onRequestWorkBlock={setPendingWorkAction} onOpenSubjects={() => selectSection("subjects")} />
       ) : section === "subjects" ? (
         selectedSubjectId == null ? (
           <SubjectsPage onSelect={setSelectedSubjectId} />
         ) : (
-          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} />
+          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} onOpenAgent={openDocumentInAgent} />
         )
       ) : section === "tasks" ? (
         <TasksPage onRequestWorkBlock={setPendingWorkAction} onNavigate={selectSection} />
@@ -143,7 +152,7 @@ export default function App() {
       ) : section === "knowledge" ? (
         <KnowledgePage />
       ) : section === "agent" ? (
-        <AgentPage />
+        <AgentPage launchContext={agentLaunchContext} />
       ) : section === "jobs" ? (
         <JobsPage />
       ) : section === "settings" ? (

@@ -1,4 +1,4 @@
-export const API_BASE_URL = "http://127.0.0.1:8766";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8766";
 
 export type DashboardSubject = {
   id: number;
@@ -275,12 +275,35 @@ export type SubjectDocumentsData = {
   }>;
 };
 
+export type DocumentContent = {
+  ok: boolean;
+  document: SubjectDocumentsData["documents"][number];
+  content: string;
+};
+
 export function getSubjectProfessor(subjectId: number): Promise<ProfessorData> {
   return requestJson<ProfessorData>(`/api/subjects/${subjectId}/professor`);
 }
 
 export function getSubjectDocuments(subjectId: number): Promise<SubjectDocumentsData> {
   return requestJson<SubjectDocumentsData>(`/api/subjects/${subjectId}/documents`);
+}
+
+export async function uploadSubjectMaterial(subjectId: number, file: File): Promise<{ ok: boolean; duplicate: boolean; message: string; document: SubjectDocumentsData["documents"][number] }> {
+  const contentBase64 = await fileToBase64(file);
+  return requestJson(`/api/subjects/${subjectId}/materials`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_name: file.name, content_base64: contentBase64 }),
+  });
+}
+
+export function getDocumentContent(documentId: number): Promise<DocumentContent> {
+  return requestJson(`/api/documents/${documentId}`);
+}
+
+export function getDocumentFileUrl(documentId: number): string {
+  return `${API_BASE_URL}/api/documents/${documentId}/file`;
 }
 
 export type Assessment = {
@@ -298,14 +321,45 @@ export function getAssessments(): Promise<{ ok: boolean; assessments: Assessment
   return requestJson("/api/assessments");
 }
 
-export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; job?: { status: string; kind: string; objective: string; created_at: string } };
+export type AgentSource = { source_number: number; document_id: number; document_title: string; source_label: string | null };
+export type ConversationMessage = { id: number; role: "user" | "assistant"; content: string; sources: AgentSource[]; created_at: string };
+export type ConversationSummary = { id: string; title: string; context_type: "general" | "subject" | "document" | "work_session"; subject_id: number | null; document_id: number | null; summary_available: boolean; message_count: number; created_at: string; updated_at: string };
+export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] };
+export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; sources: AgentSource[]; context_usage: { used: boolean; top_k: number; source_count: number; context_characters: number; subject_filtered: boolean; document_filtered: boolean }; job?: { status: string; kind: string; objective: string; created_at: string } };
 
-export function sendAgentMessage(message: string, conversationId?: string): Promise<AgentResponse> {
+export type AgentMessageOptions = {
+  conversationId?: string;
+  subjectId?: number | null;
+  documentId?: number | null;
+  contextType?: "general" | "subject" | "document" | "work_session";
+  workContext?: Record<string, unknown>;
+};
+
+export function sendAgentMessage(message: string, options: AgentMessageOptions = {}): Promise<AgentResponse> {
   return requestJson<AgentResponse>("/api/agent/message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, conversation_id: conversationId }),
+    body: JSON.stringify({
+      message,
+      conversation_id: options.conversationId,
+      subject_id: options.subjectId ?? null,
+      document_id: options.documentId ?? null,
+      context_type: options.contextType,
+      work_context: options.workContext,
+    }),
   });
+}
+
+export function getConversations(): Promise<{ ok: boolean; count: number; conversations: ConversationSummary[] }> {
+  return requestJson("/api/conversations");
+}
+
+export function getConversation(conversationId: string): Promise<{ ok: boolean; conversation: ConversationDetail }> {
+  return requestJson(`/api/conversations/${encodeURIComponent(conversationId)}`);
+}
+
+export function deleteConversation(conversationId: string): Promise<{ ok: boolean }> {
+  return requestJson(`/api/conversations/${encodeURIComponent(conversationId)}`, { method: "DELETE" });
 }
 
 export type StudySessionInput = {

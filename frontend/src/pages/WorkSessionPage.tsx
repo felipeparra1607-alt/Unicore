@@ -1,20 +1,25 @@
-import { ArrowUp, CheckCircle2, Clock3, Pause, Play, RefreshCw, Square, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUp, CheckCircle2, Clock3, ExternalLink, FileText, Pause, Play, RefreshCw, Square, X } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   createStudySession,
+  getConversation,
+  getDocumentContent,
+  getDocumentFileUrl,
   getKnowledge,
   getSubjectDocuments,
   getSubjectProfessor,
   getTasks,
   sendAgentMessage,
   type AcademicTask,
+  type AgentSource,
+  type DocumentContent,
   type KnowledgeData,
   type ProfessorData,
   type SubjectDocumentsData,
 } from "../api";
 import { WORK_SESSION_STORAGE_KEY, type StoredWorkSession } from "../workSession";
 
-type Message = { role: "user" | "agent"; text: string };
+type Message = { role: "user" | "agent"; text: string; sources?: AgentSource[] };
 type ContextState = {
   professor: ProfessorData | null;
   documents: SubjectDocumentsData | null;
@@ -44,7 +49,9 @@ export default function WorkSessionPage({
 }) {
   const [remainingMs, setRemainingMs] = useState(session.remainingMs);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [conversationId, setConversationId] = useState<string>();
+  const [conversationId, setConversationId] = useState<string | undefined>(session.conversationId);
+  const [activeDocument, setActiveDocument] = useState<DocumentContent | null>(null);
+  const [documentLoading, setDocumentLoading] = useState(false);
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [progressIndex, setProgressIndex] = useState(0);
@@ -58,7 +65,6 @@ export default function WorkSessionPage({
   const [completed, setCompleted] = useState<{ persisted: boolean; minutes: number } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
-  const initializedAgent = useRef(false);
 
   useEffect(() => {
     const moveToStart = () => {
@@ -116,44 +122,47 @@ export default function WorkSessionPage({
     return () => { active = false; };
   }, [session.action.source_id, session.action.subject_id]);
 
-  const agentContext = useMemo(() => {
-    const metadata = session.action.metadata;
-    const professorFacts = context.professor
-      ? {
-          professors: context.professor.professors.map((item) => item.name),
-          preferences: context.professor.preferences.map((item) => item.preference),
-          rubric: context.professor.rubric_criteria.map((item) => item.title),
-        }
-      : null;
-    return {
-      action: session.action.title,
-      subject: session.action.subject_name,
-      duration_minutes: session.durationMinutes,
-      recommendation_reasons: session.action.reasons,
-      due_date: context.task?.due_date ?? metadata.due_date ?? null,
-      progress_percentage: context.task?.progress_percentage ?? metadata.progress_percentage ?? null,
-      task_description: context.task?.description ?? null,
-      task_notes: context.task?.notes ?? null,
-      professor_context: professorFacts,
-      related_documents: context.documents?.documents.slice(0, 6).map((item) => item.title) ?? [],
-      priority_concepts: context.knowledge?.priority_concepts.slice(0, 5).map((item) => ({ name: item.name, status: item.status, mastery: item.mastery_percentage })) ?? [],
-    };
-  }, [context, session.action, session.durationMinutes]);
+  useEffect(() => {
+    if (!session.conversationId) return;
+    getConversation(session.conversationId).then(({ conversation }) => {
+      setMessages(conversation.messages.map((item) => ({
+        role: item.role === "assistant" ? "agent" : "user",
+        text: item.content,
+        sources: item.sources,
+      })));
+    }).catch(() => setConversationId(undefined));
+  }, [session.conversationId]);
 
-  async function askAgent(text: string, visible = true) {
+  async function askAgent(text: string) {
     const clean = text.trim();
     if (!clean || submitting) return;
-    if (visible) setMessages((current) => [...current, { role: "user", text: clean }]);
+    setMessages((current) => [...current, { role: "user", text: clean }]);
     setInput("");
     setSubmitting(true);
     setAgentError(null);
     setProgressIndex(0);
     try {
-      const response = await sendAgentMessage(clean, conversationId);
+      const response = await sendAgentMessage(clean, {
+        conversationId,
+        subjectId: session.action.subject_id,
+        documentId: activeDocument?.document.id ?? null,
+        contextType: "work_session",
+        workContext: {
+          action: session.action.title,
+          subject: session.action.subject_name,
+          duration_minutes: session.durationMinutes,
+          due_date: context.task?.due_date ?? session.action.metadata.due_date ?? null,
+          progress_percentage: context.task?.progress_percentage ?? session.action.metadata.progress_percentage ?? null,
+          task_description: context.task?.description ?? null,
+          task_notes: context.task?.notes ?? null,
+        },
+      });
       setConversationId(response.conversation_id);
+      onChange({ ...session, conversationId: response.conversation_id, activeDocumentId: activeDocument?.document.id ?? null });
       setMessages((current) => [...current, {
         role: "agent",
         text: response.answer ?? "UniCore terminó la consulta sin una respuesta visible.",
+        sources: response.sources,
       }]);
     } catch (caught) {
       setAgentError(caught instanceof Error ? caught.message : "No se pudo consultar UniCore Agent.");
@@ -161,17 +170,6 @@ export default function WorkSessionPage({
       setSubmitting(false);
     }
   }
-
-  useEffect(() => {
-    if (contextLoading || initializedAgent.current) return;
-    initializedAgent.current = true;
-    const prompt = [
-      "Estoy comenzando este bloque de trabajo académico. Ya tienes el contexto siguiente:",
-      JSON.stringify(agentContext),
-      "Dame una orientación inicial breve y práctica para ejecutar esta acción ahora. Usa solo los datos disponibles; si falta información, dilo. No realices escrituras.",
-    ].join("\n\n");
-    void askAgent(prompt, false);
-  }, [agentContext, contextLoading]);
 
   useEffect(() => {
     if (!submitting) return;
@@ -233,6 +231,18 @@ export default function WorkSessionPage({
 
   function submit(event: FormEvent) { event.preventDefault(); void askAgent(input); }
 
+  async function openDocument(documentId: number) {
+    setDocumentLoading(true); setAgentError(null);
+    try {
+      const result = await getDocumentContent(documentId);
+      setActiveDocument(result);
+      onChange({ ...session, activeDocumentId: documentId, conversationId });
+    } catch (caught) { setAgentError(caught instanceof Error ? caught.message : "No se pudo abrir el material."); }
+    finally { setDocumentLoading(false); }
+  }
+
+  useEffect(() => { if (session.activeDocumentId != null) void openDocument(session.activeDocumentId); }, []);
+
   const professorItems = context.professor?.preferences ?? [];
   const rubricItems = context.professor?.rubric_criteria ?? [];
   const documents = context.documents?.documents ?? [];
@@ -262,27 +272,29 @@ export default function WorkSessionPage({
     </header>
 
     <section className="uc-work-layout">
+      <aside className="uc-work-context">
+        <p className="uc-eyebrow">Contexto de trabajo</p>
+        {contextLoading ? <p className="uc-work-context-loading">Leyendo el contexto académico…</p> : <>
+          {(professorItems.length > 0 || rubricItems.length > 0) && <section className="uc-work-professor"><h2>Profesor y criterios</h2><ol>{[...professorItems].sort((a, b) => b.importance - a.importance || b.confidence - a.confidence).slice(0, 4).map((item) => <li key={`p-${item.id}`}><strong>{item.preference}</strong></li>)}{[...rubricItems].sort((a, b) => (b.weight_percentage ?? b.maximum_points ?? 0) - (a.weight_percentage ?? a.maximum_points ?? 0)).slice(0, 4).map((item) => <li key={`r-${item.id}`}><strong>{item.title}</strong>{item.description && <span>{item.description}</span>}</li>)}</ol></section>}
+          {(dueDate || progress != null || context.task?.description) && <section><h2>Requisitos de la tarea</h2>{dueDate && <div><span>Fecha límite</span><strong>{new Date(`${dueDate}T00:00:00`).toLocaleDateString("es-ES", { day: "numeric", month: "long" })}</strong></div>}{progress != null && <div><span>Progreso</span><strong>{progress}%</strong></div>}{context.task?.description && <p>{context.task.description}</p>}{context.task?.notes && <p>{context.task.notes}</p>}</section>}
+          {documents.length > 0 && <section className="uc-work-materials"><h2>Material relacionado</h2>{documents.slice(0, 6).map((item) => <button key={item.id} className={activeDocument?.document.id === item.id ? "is-active" : ""} onClick={() => void openDocument(item.id)} disabled={documentLoading}><FileText size={15} /><span><strong>{item.title}</strong><small>{item.file_type?.toUpperCase() ?? "Documento"}</small></span></button>)}</section>}
+          {activeDocument && <section className="uc-work-document"><header><div><span>Documento activo</span><strong>{activeDocument.document.title}</strong></div><button onClick={() => { setActiveDocument(null); onChange({ ...session, activeDocumentId: null, conversationId }); }} aria-label="Cerrar documento"><X size={15} /></button></header><pre>{activeDocument.content}</pre><a href={getDocumentFileUrl(activeDocument.document.id)} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Abrir original</a><button onClick={() => setInput(`Ayúdame con este material: `)}>Preguntar a UniCore sobre este material</button></section>}
+          {concepts.length > 0 && <section><h2>Información útil adicional</h2>{concepts.slice(0, 4).map((item) => <div key={item.id}><strong>{item.name}</strong><span>{item.mastery_percentage != null ? `${item.mastery_percentage.toFixed(0)}% de dominio` : "Sin evaluación suficiente"}</span></div>)}</section>}
+          {!context.task && professorItems.length === 0 && rubricItems.length === 0 && documents.length === 0 && concepts.length === 0 && <p className="uc-work-context-loading">No hay contexto adicional registrado para esta acción.</p>}
+        </>}
+      </aside>
+
       <div className="uc-work-agent">
         <div className="uc-work-agent-heading"><div><p className="uc-eyebrow">UniCore Agent</p><h2>Asistencia para este bloque</h2></div><span>Modo seguro · sin escrituras</span></div>
         <div ref={streamRef} className="uc-work-message-stream">
-          {messages.map((message, index) => <article key={index} className={`uc-message is-${message.role}`}><span>{message.role === "user" ? "Tú" : "UniCore"}</span><p>{message.text}</p></article>)}
+          {messages.length === 0 && <div className="uc-work-agent-neutral"><strong>Estoy aquí para ayudarte mientras trabajas.</strong><p>Puedes preguntarme sobre el enunciado, tus materiales o los criterios del profesor.</p></div>}
+          {messages.map((message, index) => <article key={index} className={`uc-message is-${message.role}`}><span>{message.role === "user" ? "Tú" : "UniCore"}</span><p>{message.text}</p>{message.sources?.length ? <div className="uc-message-sources">{message.sources.map((source) => <span key={`${source.source_number}-${source.document_id}`}>{source.document_title}{source.source_label ? ` · ${source.source_label}` : ""}</span>)}</div> : null}</article>)}
           {submitting && <article className="uc-message is-agent is-working"><span>UniCore</span><p>{progressMessages[progressIndex]}</p><i /><i /><i /></article>}
           {agentError && <div className="uc-agent-error"><span>{agentError}</span><button onClick={() => setAgentError(null)} aria-label="Cerrar error"><RefreshCw size={14} /></button></div>}
           <div ref={endRef} />
         </div>
-        <form className="uc-agent-composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Pregunta sobre esta tarea…" rows={2} disabled={submitting} /><button disabled={submitting || !input.trim()} aria-label="Enviar"><ArrowUp size={17} /></button><small>UniCore conserva el contexto de este bloque durante la conversación.</small></form>
+        <form className="uc-agent-composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder={activeDocument ? `Pregunta sobre ${activeDocument.document.title}…` : "Pregunta sobre esta tarea…"} rows={2} disabled={submitting} /><button disabled={submitting || !input.trim()} aria-label="Enviar"><ArrowUp size={17} /></button><small>{activeDocument ? "Consulta restringida al documento activo" : "Contexto de asignatura y memoria reciente"}</small></form>
       </div>
-
-      <aside className="uc-work-context">
-        <p className="uc-eyebrow">Ten en cuenta</p>
-        {contextLoading ? <p className="uc-work-context-loading">Leyendo el contexto académico…</p> : <>
-          {(dueDate || progress != null || context.task?.description) && <section><h2>La tarea</h2>{dueDate && <div><span>Fecha límite</span><strong>{new Date(`${dueDate}T00:00:00`).toLocaleDateString("es-ES", { day: "numeric", month: "long" })}</strong></div>}{progress != null && <div><span>Progreso</span><strong>{progress}%</strong></div>}{context.task?.description && <p>{context.task.description}</p>}{context.task?.notes && <p>{context.task.notes}</p>}</section>}
-          {(professorItems.length > 0 || rubricItems.length > 0) && <section><h2>Profesor y criterios</h2>{rubricItems.slice(0, 4).map((item) => <div key={`r-${item.id}`}><strong>{item.title}</strong><span>{item.weight_percentage != null ? `${item.weight_percentage}%` : item.description ?? "Criterio registrado"}</span></div>)}{professorItems.slice(0, 4).map((item) => <div key={`p-${item.id}`}><strong>{item.preference}</strong><span>Importancia {item.importance}/5</span></div>)}</section>}
-          {documents.length > 0 && <section><h2>Materiales relacionados</h2>{documents.slice(0, 5).map((item) => <div key={item.id}><strong>{item.title}</strong><span>{item.has_extracted_text ? "Texto disponible" : "Documento registrado"}</span></div>)}</section>}
-          {concepts.length > 0 && <section><h2>Conceptos que requieren atención</h2>{concepts.slice(0, 4).map((item) => <div key={item.id}><strong>{item.name}</strong><span>{item.mastery_percentage != null ? `${item.mastery_percentage.toFixed(0)}% de dominio` : "Sin evaluación suficiente"}</span></div>)}</section>}
-          {!context.task && professorItems.length === 0 && rubricItems.length === 0 && documents.length === 0 && concepts.length === 0 && <p className="uc-work-context-loading">No hay contexto adicional registrado para esta acción. El Agent seguirá usando la recomendación actual.</p>}
-        </>}
-      </aside>
     </section>
 
     {finishOpen && <div className="uc-form-backdrop" onMouseDown={() => !saving && setFinishOpen(false)}><section className="uc-form-modal uc-work-finish-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><p className="uc-eyebrow">Cerrar bloque</p><h2>Registra cómo ha ido.</h2></div><button onClick={() => setFinishOpen(false)} aria-label="Cerrar"><X size={18} /></button></header><p>Las valoraciones son opcionales. Se guardarán con los minutos reales si el bloque ha durado al menos un minuto.</p><div className="uc-work-ratings">{([['focus','Foco'],['difficulty','Dificultad'],['satisfaction','Satisfacción']] as const).map(([key, label]) => <label key={key}>{label}<select value={ratings[key]} onChange={(event) => setRatings({ ...ratings, [key]: event.target.value })}><option value="">Sin valorar</option>{[1,2,3,4,5].map((value) => <option key={value} value={value}>{value} / 5</option>)}</select></label>)}</div>{saveError && <p className="uc-form-error">{saveError}</p>}<footer><button className="uc-discard-work" onClick={discard} disabled={saving}>Salir sin registrar</button><button onClick={() => setFinishOpen(false)} disabled={saving}>Seguir trabajando</button><button className="uc-primary-action" onClick={() => void finish()} disabled={saving}>{saving ? "Registrando…" : "Finalizar"} <Clock3 size={15} /></button></footer></section></div>}
