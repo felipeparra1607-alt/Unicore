@@ -196,7 +196,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error ?? `La API de UniCore respondió con ${response.status}.`);
+    throw new Error(payload?.error ?? payload?.message ?? `La API de UniCore respondió con ${response.status}.`);
   }
   return response.json() as Promise<T>;
 }

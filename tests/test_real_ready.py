@@ -24,6 +24,7 @@ from src.prompt_builder import build_academic_prompt
 from src.providers.base import GenerationResult
 from src.rag_tools import RankedChunk
 from src.study_flows import persist_flashcards, reusable_flashcards
+from src.frontend_api import UniCoreFrontendAPIHandler
 from src.unicore_client import UniCoreMCPClient
 
 
@@ -61,7 +62,8 @@ class RealReadyIsolatedTests(unittest.TestCase):
         with self.Session() as session:
             subject = Subject(name="Historia real")
             other_subject = Subject(name="Biología ajena")
-            session.add_all([subject, other_subject]); session.flush()
+            empty_subject = Subject(name="Asignatura sin materiales")
+            session.add_all([subject, other_subject, empty_subject]); session.flush()
             task = AcademicTask(
                 subject_id=subject.id,
                 title="Ensayo final",
@@ -102,6 +104,7 @@ class RealReadyIsolatedTests(unittest.TestCase):
             session.add_all([chunk, other_chunk]); session.commit()
             self.subject_id = subject.id
             self.other_subject_id = other_subject.id
+            self.empty_subject_id = empty_subject.id
             self.task_id = task.id
             self.document_id = document.id
             self.chunk_id = chunk.id
@@ -148,7 +151,7 @@ class RealReadyIsolatedTests(unittest.TestCase):
         ):
             result = asyncio.run(self._call_tool("generate_study_material", {
                 "topic": "causas y consecuencias", "subject_id": self.subject_id,
-                "document_id": self.document_id, "mode": "explanation",
+                "document_id": None, "mode": "explanation",
                 "maximum_sources": 4, "maximum_context_characters": 4500,
             }))
             self.assertTrue(result["ok"])
@@ -160,6 +163,46 @@ class RealReadyIsolatedTests(unittest.TestCase):
             memory = build_memory_context(conversation["id"])
             self.assertIn("Idea principal", memory["recent_messages"][-1]["content"])
             self.assertEqual(CountingProvider.calls, 1)
+
+    def test_general_subject_scope_normalizes_topic_and_handles_no_material_humanely(self):
+        handler = object.__new__(UniCoreFrontendAPIHandler)
+        with patch("src.frontend_api.SessionLocal", self.Session):
+            normalized = handler._study_topic({"topic": "toda la asignatura"}, self.subject_id, "explanation")
+            self.assertEqual(normalized, "Explicación general de Historia real")
+            normalized_blank = handler._study_topic({"topic": ""}, self.subject_id, "flashcards")
+            self.assertEqual(normalized_blank, "Repaso general de Historia real")
+
+        CountingProvider.calls = 0
+        with patch("src.rag_tools.SessionLocal", self.Session), patch(
+            "src.rag_tools.create_embedding", lambda _value: [1.0, 0.0]
+        ), patch("src.study_tools.create_provider", lambda **_kwargs: CountingProvider()):
+            flashcards = asyncio.run(self._call_tool("generate_study_material", {
+                "topic": "Repaso general de Historia real",
+                "subject_id": self.subject_id,
+                "document_id": None,
+                "mode": "flashcards",
+                "item_count": 5,
+                "maximum_sources": 4,
+            }))
+            no_material = asyncio.run(self._call_tool("generate_study_material", {
+                "topic": "Explicación general de Asignatura sin materiales",
+                "subject_id": self.empty_subject_id,
+                "document_id": None,
+                "mode": "explanation",
+                "maximum_sources": 4,
+            }))
+
+        self.assertTrue(flashcards["generated"])
+        self.assertEqual(len(flashcards["content"]["items"]), 5)
+        self.assertTrue(no_material["ok"])
+        self.assertFalse(no_material["generated"])
+        self.assertEqual(no_material["source_count"], 0)
+        self.assertEqual(CountingProvider.calls, 1)
+        human_error = handler._study_material_unavailable(no_material, "explanation")
+        self.assertEqual(human_error["code"], "study_material_missing")
+        self.assertIn("Aún no hay material suficiente", human_error["error"])
+        flashcard_error = handler._study_material_unavailable(no_material, "flashcards")
+        self.assertIn("flashcards", flashcard_error["error"])
 
     def test_flashcards_are_batched_persisted_reused_and_rated(self):
         CountingProvider.calls = 0

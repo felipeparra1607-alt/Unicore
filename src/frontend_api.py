@@ -19,6 +19,8 @@ from src.conversation_memory import (
     list_conversations,
     refresh_summary_if_needed,
 )
+from src.database.connection import SessionLocal
+from src.database.models import Subject
 from src.database.migrate_conversations import migrate_conversations
 from src.decision_engine import build_decision_plan
 from src.document_library import (
@@ -49,6 +51,65 @@ PORT = int(os.getenv("UNICORE_FRONTEND_PORT", "8766"))
 
 
 class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
+    def _study_topic(
+        self,
+        payload: dict,
+        subject_id: int,
+        mode: str,
+    ) -> str:
+        """Convierte el alcance general visual en una consulta académica útil."""
+
+        raw_topic = str(payload.get("topic") or "").strip()
+        general_values = {
+            "",
+            "toda la asignatura",
+            "asignatura completa",
+            "todo el contenido",
+        }
+        if raw_topic.casefold() not in general_values:
+            return raw_topic
+
+        with SessionLocal() as session:
+            subject = session.get(Subject, subject_id)
+            if subject is None:
+                raise ValueError("La asignatura seleccionada no existe")
+            prefix = "Explicación general de" if mode == "explanation" else "Repaso general de"
+            return f"{prefix} {subject.name}"
+
+    def _study_material_unavailable(
+        self,
+        result: dict,
+        mode: str,
+    ) -> dict:
+        """Expone una ausencia de evidencia como estado humano, no técnico."""
+
+        source_count = int(result.get("source_count") or 0)
+        if source_count == 0:
+            error = (
+                "Aún no hay material suficiente en esta asignatura para "
+                f"preparar {'una explicación' if mode == 'explanation' else 'flashcards'}. "
+                "Sube apuntes o selecciona otro contexto."
+            )
+            code = "study_material_missing"
+        else:
+            error = (
+                "No hay material suficientemente relacionado con este tema "
+                f"para preparar {'una explicación' if mode == 'explanation' else 'flashcards'}. "
+                "Prueba con un tema más concreto o selecciona un material."
+            )
+            code = "study_evidence_insufficient"
+
+        return {
+            "ok": False,
+            "error": error,
+            "code": code,
+            "topic": result.get("topic"),
+            "evidence": result.get("evidence"),
+            "source_count": source_count,
+            "sources": result.get("sources") or [],
+            "provider_called": False,
+        }
+
     def _allowed_origin(self) -> str:
         origin = self.headers.get("Origin", "")
         try:
@@ -466,8 +527,8 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/study/explanations":
                 payload = self._read_json()
-                topic = str(payload.get("topic", "")).strip()
                 subject_id = int(payload.get("subject_id"))
+                topic = self._study_topic(payload, subject_id, "explanation")
                 document_id = payload.get("document_id")
                 result = self._run_tool("generate_study_material", {
                     "topic": topic,
@@ -484,7 +545,13 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(result, 502)
                     return
                 if not result.get("generated"):
-                    self._send_json(result, 422)
+                    self._send_json(
+                        self._study_material_unavailable(
+                            result,
+                            "explanation",
+                        ),
+                        422,
+                    )
                     return
                 conversation = create_conversation(
                     title=f"Explicación · {topic}"[:180],
@@ -517,8 +584,8 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/api/study/flashcards":
                 payload = self._read_json()
-                topic = str(payload.get("topic", "")).strip()
                 subject_id = int(payload.get("subject_id"))
+                topic = self._study_topic(payload, subject_id, "flashcards")
                 document_id = payload.get("document_id")
                 item_count = max(5, min(10, int(payload.get("item_count", 8))))
                 existing = reusable_flashcards(
@@ -552,7 +619,13 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(result, 502)
                     return
                 if not result.get("generated"):
-                    self._send_json(result, 422)
+                    self._send_json(
+                        self._study_material_unavailable(
+                            result,
+                            "flashcards",
+                        ),
+                        422,
+                    )
                     return
                 validation = result.get("structured_output_validation") or {}
                 content = result.get("content") or {}
