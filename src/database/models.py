@@ -27,6 +27,11 @@ class Subject(Base):
     )
     academic_year: Mapped[str | None] = mapped_column(String(20))
     description: Mapped[str | None] = mapped_column(Text)
+    academic_language: Mapped[str] = mapped_column(
+        String(30),
+        default="Spanish",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -94,6 +99,11 @@ class Document(Base):
     )
     file_type: Mapped[str | None] = mapped_column(String(50))
     document_type: Mapped[str | None] = mapped_column(String(100))
+    academic_year: Mapped[str | None] = mapped_column(String(20))
+    semester: Mapped[str | None] = mapped_column(String(40))
+    professor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("professors.id")
+    )
     subject_id: Mapped[int | None] = mapped_column(
         ForeignKey("subjects.id"),
     )
@@ -555,6 +565,25 @@ class ReviewItem(Base):
     ease_factor: Mapped[float] = mapped_column(
         default=2.5,
         nullable=False,
+    )
+
+    leitner_box: Mapped[int] = mapped_column(
+        default=1,
+        nullable=False,
+    )
+
+    cognitive_level: Mapped[str] = mapped_column(
+        String(30),
+        default="mixed",
+        nullable=False,
+    )
+
+    concept_name: Mapped[str | None] = mapped_column(
+        String(250),
+    )
+
+    last_rating: Mapped[str | None] = mapped_column(
+        String(30),
     )
 
     last_reviewed_at: Mapped[datetime | None] = mapped_column(
@@ -1290,3 +1319,92 @@ class KnowledgeEvidence(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+
+
+class FlashcardDraft(Base):
+    __tablename__ = "flashcard_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"))
+    topic: Mapped[str] = mapped_column(String(250), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str | None] = mapped_column(Text)
+    cognitive_level: Mapped[str] = mapped_column(String(30), default="mixed", nullable=False)
+    answer_mode: Mapped[str] = mapped_column(String(30), default="mental", nullable=False)
+    probable_duplicate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    duplicate_review_item_id: Mapped[int | None] = mapped_column(ForeignKey("review_items.id"))
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    rejection_reason: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class TokenUsage(Base):
+    __tablename__ = "token_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    feature: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subjects.id"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    provider: Mapped[str | None] = mapped_column(String(60))
+    model: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class WrittenEvaluation(Base):
+    __tablename__ = "written_evaluations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    review_item_id: Mapped[int] = mapped_column(ForeignKey("review_items.id"), nullable=False, index=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
+    answer_text: Mapped[str] = mapped_column(Text, nullable=False)
+    overall_score: Mapped[float | None] = mapped_column(Float)
+    dimensions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    errors_json: Mapped[str] = mapped_column(Text, nullable=False)
+    improvements_json: Mapped[str] = mapped_column(Text, nullable=False)
+    example_improvement: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(String(60))
+    model: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StudentModelEvidence(Base):
+    __tablename__ = "student_model_evidence"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int | None] = mapped_column(ForeignKey("subjects.id"), index=True)
+    dimension: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class ProfessorAssignment(Base):
+    __tablename__ = "professor_assignments"
+    __table_args__ = (UniqueConstraint("professor_id", "subject_id", name="uq_professor_subject"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    professor_id: Mapped[int] = mapped_column(ForeignKey("professors.id"), nullable=False, index=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class KnowledgeConnection(Base):
+    __tablename__ = "knowledge_connections"
+    __table_args__ = (
+        UniqueConstraint("source_concept_id", "target_concept_id", name="uq_knowledge_connection"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_concept_id: Mapped[int] = mapped_column(ForeignKey("knowledge_concepts.id"), nullable=False)
+    target_concept_id: Mapped[int] = mapped_column(ForeignKey("knowledge_concepts.id"), nullable=False)
+    relationship: Mapped[str] = mapped_column(String(120), default="related", nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), default="manual", nullable=False)
+    evidence_reference: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

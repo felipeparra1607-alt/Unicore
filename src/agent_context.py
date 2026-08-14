@@ -9,6 +9,7 @@ from src.rag_tools import (
     retrieve_ranked_chunks,
     select_context_chunks,
 )
+from src.v11_services import hierarchical_retrieval
 
 
 RAG_TOP_K = 4
@@ -26,6 +27,20 @@ _DOCUMENT_TERMS = {
     "según", "segun", "texto", "profesor", "rúbrica", "rubrica", "criterio",
     "teoría", "teoria", "concepto", "define", "explica", "diferencia",
 }
+
+_GLOBAL_MEMORY_PATTERNS = (
+    r"otras? asignaturas?",
+    r"asignaturas? anteriores?",
+    r"conocimientos? (?:previos?|anteriores?)",
+    r"academic memory",
+    r"estudi[ée] antes",
+    r"relaciona(?:r|lo)? con (?:algo|cosas) (?:anterior|previo)",
+)
+
+
+def requests_global_academic_memory(message: str) -> bool:
+    clean = " ".join(message.casefold().split())
+    return any(re.search(pattern, clean) for pattern in _GLOBAL_MEMORY_PATTERNS)
 
 
 def needs_document_retrieval(message: str, document_id: int | None = None) -> bool:
@@ -84,20 +99,29 @@ def build_selective_agent_context(
     sources: list[dict] = []
     retrieval_used = needs_document_retrieval(message, document_id)
     context_characters = 0
+    global_requested = requests_global_academic_memory(message)
     if retrieval_used:
-        ranked = retrieve_ranked_chunks(
-            query=message,
-            subject_id=subject_id,
-            document_id=document_id,
-            semantic_weight=0.75,
-        )
-        selected = select_context_chunks(
-            ranked_chunks=ranked,
-            minimum_score=0.20,
-            maximum_sources=RAG_TOP_K,
-            maximum_context_characters=RAG_CONTEXT_CHARACTERS,
-            redundancy_threshold=0.80,
-        )
+        if global_requested and subject_id is not None and document_id is None:
+            hierarchy = hierarchical_retrieval(
+                query=message,
+                subject_id=subject_id,
+                include_global=True,
+            )
+            selected = [*hierarchy["current"], *hierarchy["historical"]]
+        else:
+            ranked = retrieve_ranked_chunks(
+                query=message,
+                subject_id=subject_id,
+                document_id=document_id,
+                semantic_weight=0.75,
+            )
+            selected = select_context_chunks(
+                ranked_chunks=ranked,
+                minimum_score=0.20,
+                maximum_sources=RAG_TOP_K,
+                maximum_context_characters=RAG_CONTEXT_CHARACTERS,
+                redundancy_threshold=0.80,
+            )
         if selected:
             rag_context = build_context_text(selected)
             context_characters = len(rag_context)
@@ -128,5 +152,10 @@ def build_selective_agent_context(
             "context_characters": context_characters,
             "subject_filtered": subject_id is not None,
             "document_filtered": document_id is not None,
+            "global_requested": global_requested,
+            "historical_source_count": sum(
+                1 for item in selected
+                if subject_id is not None and item.document.subject_id != subject_id
+            ) if retrieval_used else 0,
         },
     }

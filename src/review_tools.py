@@ -39,6 +39,17 @@ def review_item_to_dict(
         "incorrect_count": item.incorrect_count,
         "interval_days": item.interval_days,
         "ease_factor": item.ease_factor,
+        "leitner_box": item.leitner_box,
+        "leitner_name": {
+            1: "Aprendiendo",
+            2: "Familiar",
+            3: "Consolidando",
+            4: "Dominado",
+            5: "Largo plazo",
+        }.get(item.leitner_box or 1, "Aprendiendo"),
+        "cognitive_level": item.cognitive_level,
+        "concept_name": item.concept_name,
+        "last_rating": item.last_rating,
         "last_reviewed_at": (
             item.last_reviewed_at.isoformat()
             if item.last_reviewed_at

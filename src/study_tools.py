@@ -28,6 +28,8 @@ def study_mode_instructions(
     mode: str,
     item_count: int,
     difficulty: str,
+    cognitive_level: str = "mixed",
+    academic_language: str = "Spanish",
 ) -> str:
     """Devuelve instrucciones específicas para cada modo."""
 
@@ -81,11 +83,19 @@ def study_mode_instructions(
         )
 
     if mode == "flashcards":
+        level_instruction = (
+            "Distribuye aproximadamente 10% recall, 20% understanding, "
+            "35% application y 35% analysis."
+            if cognitive_level == "mixed"
+            else f"Prioriza el nivel cognitivo {cognitive_level}."
+        )
         return (
             common_rules
             + f"Crea exactamente {item_count} flashcards. "
+            + f"Escribe las tarjetas en {academic_language}. {level_instruction} "
             "Devuelve únicamente JSON válido con esta estructura: "
             '{"items":[{"front":"","back":"",'
+            '"cognitive_level":"application",'
             '"sources":["FUENTE 1"]}]}. '
             "El frente debe plantear una pregunta o concepto y "
             "el reverso debe contener una respuesta breve y precisa."
@@ -370,6 +380,10 @@ def register_study_tools(mcp) -> None:
         minimum_score: float = 0.20,
         semantic_weight: float = 0.75,
         redundancy_threshold: float = 0.80,
+        cognitive_level: str = "mixed",
+        academic_language: str = "Spanish",
+        professor_context: str | None = None,
+        student_context: str | None = None,
     ) -> dict:
         """
         Genera materiales de estudio fundamentados en documentos.
@@ -383,6 +397,7 @@ def register_study_tools(mcp) -> None:
         clean_topic = topic.strip()
         clean_mode = mode.strip().casefold()
         clean_difficulty = difficulty.strip().casefold()
+        clean_cognitive_level = cognitive_level.strip().casefold()
 
         if not clean_topic:
             return {
@@ -419,6 +434,14 @@ def register_study_tools(mcp) -> None:
                 "error": (
                     "item_count debe estar entre 1 y 30"
                 ),
+            }
+
+        if clean_cognitive_level not in {
+            "recall", "understanding", "application", "analysis", "mixed"
+        }:
+            return {
+                "ok": False,
+                "error": "cognitive_level no compatible",
             }
 
         if maximum_sources < 1 or maximum_sources > 4:
@@ -508,18 +531,24 @@ def register_study_tools(mcp) -> None:
             mode=clean_mode,
             item_count=item_count,
             difficulty=clean_difficulty,
+            cognitive_level=clean_cognitive_level,
+            academic_language=academic_language,
         )
 
         system_message = (
             "Eres el motor de estudio académico de UniCore. "
             "Tu función es ayudar al estudiante a aprender desde "
             "sus propios documentos. "
+            f"Responde en el idioma académico {academic_language}. "
             f"{instructions}"
         )
 
         user_message = (
             f"Tema solicitado:\n{clean_topic}\n\n"
             f"Nivel:\n{clean_difficulty}\n\n"
+            f"Idioma académico:\n{academic_language}\n\n"
+            f"Criterios reales del profesor:\n{professor_context or 'No registrados'}\n\n"
+            f"Student Model relevante:\n{student_context or 'Sin evidencia suficiente'}\n\n"
             f"Contexto académico:\n{context}"
         )
 
@@ -633,6 +662,8 @@ def register_study_tools(mcp) -> None:
             "document_id": document_id,
             "mode": clean_mode,
             "difficulty": clean_difficulty,
+            "cognitive_level": clean_cognitive_level,
+            "academic_language": academic_language,
             "item_count": (
                 item_count
                 if clean_mode in {"quiz", "flashcards"}

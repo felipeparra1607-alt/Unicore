@@ -28,6 +28,7 @@ from src.database.models import (
     ClassSession,
     Document,
     Professor,
+    ProfessorAssignment,
     ProfessorPreference,
     ReviewItem,
     RubricCriterion,
@@ -615,6 +616,9 @@ def _build_documents(
                 "document_type": (
                     document.document_type
                 ),
+                "academic_year": document.academic_year,
+                "semester": document.semester,
+                "professor_id": document.professor_id,
                 "subject_id": (
                     document.subject_id
                 ),
@@ -721,6 +725,7 @@ def _build_subject_classes(
             "subject": {
                 "id": subject.id,
                 "name": subject.name,
+                "academic_language": subject.academic_language,
             },
             "count": len(result),
             "classes": result[:30],
@@ -1004,7 +1009,7 @@ def _build_subject_professor(
                 ),
             }
 
-        professors = session.scalars(
+        direct_professors = list(session.scalars(
             select(
                 Professor
             )
@@ -1015,7 +1020,19 @@ def _build_subject_professor(
             .order_by(
                 Professor.name.asc()
             )
-        ).all()
+        ).all())
+        assigned_ids = list(session.scalars(
+            select(ProfessorAssignment.professor_id).where(
+                ProfessorAssignment.subject_id == subject_id
+            )
+        ))
+        assigned_professors = list(session.scalars(
+            select(Professor).where(Professor.id.in_(assigned_ids))
+        )) if assigned_ids else []
+        professors = sorted(
+            {item.id: item for item in [*direct_professors, *assigned_professors]}.values(),
+            key=lambda item: item.name.casefold(),
+        )
 
         preferences = session.scalars(
             select(
@@ -1055,6 +1072,7 @@ def _build_subject_professor(
             "subject": {
                 "id": subject.id,
                 "name": subject.name,
+                "academic_language": subject.academic_language,
             },
             "professors": [
                 {

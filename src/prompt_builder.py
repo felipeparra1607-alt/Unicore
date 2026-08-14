@@ -15,6 +15,7 @@ from src.database.models import (
 )
 from src.model_answer_tools import build_sources_summary
 from src.rag_tools import build_context_text, retrieve_ranked_chunks, select_context_chunks
+from src.v11_services import hierarchical_retrieval, student_model
 
 
 PROMPT_RAG_TOP_K = 4
@@ -38,6 +39,11 @@ def build_academic_prompt(
     maximum_context_characters: int = PROMPT_CONTEXT_CHARACTERS,
     session_factory=SessionLocal,
     retriever: Callable[..., list] = retrieve_ranked_chunks,
+    include_professor: bool = True,
+    include_rubric: bool = True,
+    include_academic_memory: bool = False,
+    include_improvements: bool = False,
+    include_strengths: bool = False,
 ) -> dict[str, Any]:
     """Construye un prompt académico selectivo sin llamar a un modelo."""
 
@@ -75,7 +81,7 @@ def build_academic_prompt(
         professors = []
         preferences = []
         rubric = []
-        if subject is not None:
+        if subject is not None and (include_professor or include_rubric):
             professors = list(session.scalars(select(Professor).where(Professor.subject_id == subject.id)))
             preferences = list(
                 session.scalars(
@@ -93,6 +99,11 @@ def build_academic_prompt(
                     .limit(6)
                 )
             )
+            if not include_professor:
+                professors = []
+                preferences = []
+            if not include_rubric:
+                rubric = []
 
         subject_name = subject.name if subject is not None else None
         professor_names = [item.name for item in professors]
@@ -114,20 +125,31 @@ def build_academic_prompt(
             rubric_lines.append(f"{item.title}{weight}" + (f": {detail}" if detail else ""))
 
     selected_chunks = []
+    historical_source_count = 0
     if effective_subject_id is not None:
-        ranked = retriever(
-            query=clean_objective,
-            subject_id=effective_subject_id,
-            document_id=document_id,
-            semantic_weight=0.75,
-        )
-        selected_chunks = select_context_chunks(
-            ranked_chunks=ranked,
-            minimum_score=0.20,
-            maximum_sources=maximum_sources,
-            maximum_context_characters=maximum_context_characters,
-            redundancy_threshold=0.80,
-        )
+        if include_academic_memory and document_id is None:
+            hierarchy = hierarchical_retrieval(
+                query=clean_objective,
+                subject_id=effective_subject_id,
+                include_global=True,
+                retriever=retriever,
+            )
+            selected_chunks = [*hierarchy["current"], *hierarchy["historical"]]
+            historical_source_count = len(hierarchy["historical"])
+        else:
+            ranked = retriever(
+                query=clean_objective,
+                subject_id=effective_subject_id,
+                document_id=document_id,
+                semantic_weight=0.75,
+            )
+            selected_chunks = select_context_chunks(
+                ranked_chunks=ranked,
+                minimum_score=0.20,
+                maximum_sources=maximum_sources,
+                maximum_context_characters=maximum_context_characters,
+                redundancy_threshold=0.80,
+            )
 
     sources = build_sources_summary(selected_chunks)
     material_context = build_context_text(selected_chunks)
@@ -165,6 +187,17 @@ def build_academic_prompt(
         )
     if material_context:
         sections.append("MATERIAL RELEVANTE\n" + material_context)
+    model = student_model(subject_id=effective_subject_id, session_factory=session_factory)
+    if include_improvements and model["areas_for_improvement"]:
+        sections.append(
+            "ÁREAS DE MEJORA ACTUALES\n"
+            + "\n".join(f"- {item['dimension']}: {item['status']}" for item in model["areas_for_improvement"][:4])
+        )
+    if include_strengths and model["strengths"]:
+        sections.append(
+            "FORTALEZAS ACTUALES\n"
+            + "\n".join(f"- {item['dimension']}" for item in model["strengths"][:4])
+        )
     sections.append(
         "INSTRUCCIONES\n"
         "Trabaja únicamente con el contexto proporcionado. Señala cualquier dato que falte en vez de inventarlo. "
@@ -196,5 +229,14 @@ def build_academic_prompt(
             "subject_filtered": effective_subject_id is not None,
             "document_filtered": document_id is not None,
             "provider_called": False,
+            "historical_source_count": historical_source_count,
+        },
+        "context_selection": {
+            "professor": include_professor,
+            "rubric": include_rubric,
+            "academic_memory": include_academic_memory,
+            "improvements": include_improvements,
+            "strengths": include_strengths,
+            "estimated_load": "Alto" if include_academic_memory and (include_professor or include_rubric) else "Medio" if any([include_professor, include_rubric, include_improvements, include_strengths]) else "Bajo",
         },
     }

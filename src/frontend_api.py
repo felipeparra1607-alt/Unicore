@@ -22,6 +22,7 @@ from src.conversation_memory import (
 from src.database.connection import SessionLocal
 from src.database.models import Subject
 from src.database.migrate_conversations import migrate_conversations
+from src.database.migrate_v11 import migrate_v11
 from src.decision_engine import build_decision_plan
 from src.document_library import (
     get_document_content,
@@ -45,6 +46,22 @@ from src.study_flows import persist_flashcards, reusable_flashcards
 from src.unicore_dashboard import build_dashboard_data
 from src.unicore_agent import UniCoreAgent, extract_json_object
 from src.unicore_client import UniCoreMCPClient
+from src.v11_services import (
+    academic_map,
+    add_professor_criterion,
+    assign_professor,
+    create_flashcard_drafts,
+    decide_flashcard_draft,
+    evaluate_written_answer,
+    leitner_overview,
+    move_flashcard,
+    professors_overview,
+    rate_leitner_card,
+    record_token_usage,
+    student_model,
+    study_generation_context,
+    token_analytics,
+)
 
 HOST = "127.0.0.1"
 PORT = int(os.getenv("UNICORE_FRONTEND_PORT", "8766"))
@@ -352,6 +369,31 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(data, 200 if data.get("ok") else 400)
                 return
 
+            if parsed.path == "/api/ai-usage":
+                days = int(query.get("days", ["14"])[0])
+                self._send_json(token_analytics(days=days))
+                return
+
+            if parsed.path == "/api/leitner":
+                subject_value = query.get("subject_id", [None])[0]
+                subject_id = int(subject_value) if subject_value not in (None, "") else None
+                self._send_json(leitner_overview(subject_id=subject_id))
+                return
+
+            if parsed.path == "/api/student-model":
+                subject_value = query.get("subject_id", [None])[0]
+                subject_id = int(subject_value) if subject_value not in (None, "") else None
+                self._send_json(student_model(subject_id=subject_id))
+                return
+
+            if parsed.path == "/api/professors":
+                self._send_json(professors_overview())
+                return
+
+            if parsed.path == "/api/academic-map":
+                self._send_json(academic_map())
+                return
+
             if parsed.path == "/api/study":
                 subject_value = query.get("subject_id", [None])[0]
                 if subject_value in (None, ""):
@@ -521,6 +563,11 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     document_id=payload.get("document_id"),
                     maximum_sources=4,
                     maximum_context_characters=4200,
+                    include_professor=bool(payload.get("include_professor", True)),
+                    include_rubric=bool(payload.get("include_rubric", True)),
+                    include_academic_memory=bool(payload.get("include_academic_memory", False)),
+                    include_improvements=bool(payload.get("include_improvements", False)),
+                    include_strengths=bool(payload.get("include_strengths", False)),
                 )
                 self._send_json(result, 200 if result.get("ok") else 400)
                 return
@@ -530,6 +577,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 subject_id = int(payload.get("subject_id"))
                 topic = self._study_topic(payload, subject_id, "explanation")
                 document_id = payload.get("document_id")
+                generation_context = study_generation_context(subject_id=subject_id)
                 result = self._run_tool("generate_study_material", {
                     "topic": topic,
                     "subject_id": subject_id,
@@ -540,6 +588,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     "maximum_sources": 4,
                     "maximum_context_characters": 4500,
                     "maximum_output_tokens": 650,
+                    **generation_context,
                 })
                 if not result.get("ok"):
                     self._send_json(result, 502)
@@ -566,6 +615,14 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     str(result.get("content") or ""),
                     sources=result.get("sources") or [],
                 )
+                usage = record_token_usage(
+                    usage=result.get("usage"),
+                    feature="explanation",
+                    subject_id=subject_id,
+                    conversation_id=conversation["id"],
+                    provider=result.get("provider"),
+                    model=result.get("model"),
+                )
                 self._send_json({
                     "ok": True,
                     "conversation_id": conversation["id"],
@@ -578,7 +635,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         "context_characters": result.get("context_characters", 0),
                         "document_filtered": document_id is not None,
                     },
-                    "usage": result.get("usage"),
+                    "usage": usage,
                 }, 201)
                 return
 
@@ -588,6 +645,8 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 topic = self._study_topic(payload, subject_id, "flashcards")
                 document_id = payload.get("document_id")
                 item_count = max(5, min(10, int(payload.get("item_count", 8))))
+                cognitive_level = str(payload.get("cognitive_level", "mixed")).casefold()
+                answer_mode = str(payload.get("answer_mode", "mental")).casefold()
                 existing = reusable_flashcards(
                     subject_id=subject_id,
                     topic=topic,
@@ -614,6 +673,8 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     "maximum_sources": 4,
                     "maximum_context_characters": 4500,
                     "maximum_output_tokens": 900,
+                    "cognitive_level": cognitive_level,
+                    **study_generation_context(subject_id=subject_id),
                 })
                 if not result.get("ok"):
                     self._send_json(result, 502)
@@ -633,24 +694,31 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 if not validation.get("valid") or not isinstance(cards, list):
                     self._send_json({"ok": False, "error": validation.get("error") or "El lote de flashcards no es válido"}, 502)
                     return
-                saved = persist_flashcards(
+                drafts = create_flashcard_drafts(
                     subject_id=subject_id,
                     topic=topic,
                     cards=cards,
                     sources=result.get("sources") or [],
                     document_id=document_id,
+                    cognitive_level=cognitive_level,
+                    answer_mode=answer_mode,
                 )
-                if not saved.get("ok"):
-                    self._send_json(saved, 400)
-                    return
+                usage = record_token_usage(
+                    usage=result.get("usage"),
+                    feature="flashcards",
+                    subject_id=subject_id,
+                    provider=result.get("provider"),
+                    model=result.get("model"),
+                )
                 self._send_json({
                     "ok": True,
                     "topic": topic,
-                    "cards": saved["cards"],
-                    "reused": saved["reused"],
+                    "cards": [],
+                    "drafts": drafts,
+                    "reused": False,
                     "provider_called": result.get("provider_called", False),
                     "source_count": result.get("source_count", 0),
-                    "usage": result.get("usage"),
+                    "usage": usage,
                 }, 201)
                 return
 
@@ -662,19 +730,71 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 review_item_id = int(path_parts[3])
                 payload = self._read_json()
                 rating = str(payload.get("rating", "")).casefold()
-                rating_map = {
-                    "difficult": {"correct": False, "confidence": 1},
-                    "good": {"correct": True, "confidence": 3},
-                    "easy": {"correct": True, "confidence": 5},
-                }
-                if rating not in rating_map:
+                if rating not in {"difficult", "good", "easy"}:
                     self._send_json({"ok": False, "error": "rating debe ser difficult, good o easy"}, 400)
                     return
-                result = self._run_tool("submit_review_result", {
-                    "review_item_id": review_item_id,
-                    **rating_map[rating],
-                })
+                result = rate_leitner_card(review_item_id, rating=rating)
                 self._send_json(result, 200 if result.get("ok") else 400)
+                return
+
+            if parsed.path.startswith("/api/study/flashcard-drafts/") and parsed.path.endswith("/decision"):
+                path_parts = parsed.path.strip("/").split("/")
+                draft_id = int(path_parts[3])
+                payload = self._read_json()
+                result = decide_flashcard_draft(
+                    draft_id,
+                    accept=bool(payload.get("accept")),
+                    rejection_reason=payload.get("rejection_reason"),
+                )
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+
+            if parsed.path.startswith("/api/study/flashcards/") and parsed.path.endswith("/move"):
+                path_parts = parsed.path.strip("/").split("/")
+                review_item_id = int(path_parts[3])
+                payload = self._read_json()
+                result = move_flashcard(
+                    review_item_id,
+                    target_box=int(payload["target_box"]) if payload.get("target_box") is not None else None,
+                    review_earlier=bool(payload.get("review_earlier", False)),
+                )
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+
+            if parsed.path.startswith("/api/study/flashcards/") and parsed.path.endswith("/evaluate"):
+                path_parts = parsed.path.strip("/").split("/")
+                review_item_id = int(path_parts[3])
+                payload = self._read_json()
+                result = evaluate_written_answer(
+                    review_item_id=review_item_id,
+                    answer_text=str(payload.get("answer", "")),
+                )
+                self._send_json(result, 200 if result.get("ok") else 502)
+                return
+
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/professor"):
+                path_parts = parsed.path.strip("/").split("/")
+                subject_id = int(path_parts[2])
+                payload = self._read_json()
+                result = assign_professor(
+                    subject_id=subject_id,
+                    professor_id=int(payload["professor_id"]) if payload.get("professor_id") is not None else None,
+                    name=payload.get("name"),
+                )
+                self._send_json(result, 201 if result.get("ok") else 400)
+                return
+
+            if parsed.path.startswith("/api/professors/") and parsed.path.endswith("/criteria"):
+                path_parts = parsed.path.strip("/").split("/")
+                professor_id = int(path_parts[2])
+                payload = self._read_json()
+                result = add_professor_criterion(
+                    professor_id=professor_id,
+                    subject_id=int(payload.get("subject_id")),
+                    text_value=str(payload.get("text", "")),
+                    importance=int(payload.get("importance", 3)),
+                )
+                self._send_json(result, 201 if result.get("ok") else 400)
                 return
 
             if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/materials"):
@@ -696,6 +816,10 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     content=file_content,
                     subject_id=subject_id,
                     title=payload.get("title"),
+                    document_type=str(payload.get("document_type") or "course_material"),
+                    academic_year=payload.get("academic_year"),
+                    semester=payload.get("semester"),
+                    professor_id=payload.get("professor_id"),
                 )
                 self._send_json(result, 200 if result.get("duplicate") else 201)
                 return
@@ -743,6 +867,14 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     runtime_context=runtime_context,
                 )
                 result = asyncio.run(agent.run(message, supplemental_context=selected_context["context"]))
+                usage = record_token_usage(
+                    usage=result.get("usage"),
+                    feature="agent",
+                    subject_id=conversation.get("subject_id"),
+                    conversation_id=conversation["id"],
+                    provider=(result.get("usage") or {}).get("provider"),
+                    model=(result.get("usage") or {}).get("model"),
+                )
                 assistant_text = result.get("answer")
                 job = result.get("job")
                 if not assistant_text and isinstance(job, dict):
@@ -763,6 +895,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     "error": result.get("error"),
                     "sources": selected_context["sources"],
                     "context_usage": selected_context["retrieval"],
+                    "usage": usage,
                 }
                 if isinstance(job, dict):
                     response["job"] = {
@@ -814,6 +947,23 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 })
                 self._send_json(result, 200 if result.get("ok") else 400)
                 return
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/academic-language"):
+                path_parts = parsed.path.strip("/").split("/")
+                subject_id = int(path_parts[2])
+                payload = self._read_json()
+                language = str(payload.get("academic_language", "")).strip().title()
+                if language not in {"English", "Spanish"}:
+                    self._send_json({"ok": False, "error": "El idioma debe ser English o Spanish"}, 400)
+                    return
+                with SessionLocal() as session:
+                    subject = session.get(Subject, subject_id)
+                    if subject is None:
+                        self._send_json({"ok": False, "error": "La asignatura no existe"}, 404)
+                        return
+                    subject.academic_language = language
+                    session.commit()
+                self._send_json({"ok": True, "subject_id": subject_id, "academic_language": language})
+                return
             self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_json({"ok": False, "error": str(exc)}, 400)
@@ -840,6 +990,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    migrate_v11()
     migrate_conversations()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)
     print()

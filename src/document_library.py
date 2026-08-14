@@ -23,6 +23,9 @@ def _serialize_document(document: Document, chunk_count: int | None = None) -> d
         "title": document.title,
         "file_type": document.file_type,
         "document_type": document.document_type,
+        "academic_year": document.academic_year,
+        "semester": document.semester,
+        "professor_id": document.professor_id,
         "subject_id": document.subject_id,
         "has_extracted_text": bool(document.extracted_text),
         "character_count": len(document.extracted_text or ""),
@@ -52,6 +55,10 @@ def ingest_document_bytes(
     content: bytes,
     subject_id: int,
     title: str | None = None,
+    document_type: str = "course_material",
+    academic_year: str | None = None,
+    semester: str | None = None,
+    professor_id: int | None = None,
 ) -> dict:
     """Persiste y prepara un material reutilizando el pipeline documental."""
 
@@ -88,7 +95,7 @@ def ingest_document_bytes(
             file_path=str(final_path),
             subject_id=subject_id,
             title=(str(title or "").strip() or Path(clean_name).stem),
-            document_type="course_material",
+            document_type=document_type,
         )
         if not registered.get("ok"):
             duplicate = registered.get("document")
@@ -117,6 +124,9 @@ def ingest_document_bytes(
             if document is None:
                 raise RuntimeError("El material dejó de estar disponible durante la preparación")
             document.extracted_text = extracted
+            document.academic_year = academic_year
+            document.semester = semester
+            document.professor_id = professor_id
             session.commit()
 
         chunk_result = generate_chunks_for_document(registered_id)
