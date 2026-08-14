@@ -37,7 +37,9 @@ from src.mcp_resources import (
     _build_subject_study,
     _build_tasks,
 )
+from src.prompt_builder import build_academic_prompt
 from src.runtime_context import build_runtime_context
+from src.study_flows import persist_flashcards, reusable_flashcards
 from src.unicore_dashboard import build_dashboard_data
 from src.unicore_agent import UniCoreAgent, extract_json_object
 from src.unicore_client import UniCoreMCPClient
@@ -447,6 +449,159 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 payload = self._read_json(maximum_bytes=12 * 1024 * 1024)
                 result = self._analyze_task_file(payload)
                 self._send_json(result)
+                return
+
+            if parsed.path == "/api/prompts/build":
+                payload = self._read_json()
+                result = build_academic_prompt(
+                    objective=str(payload.get("objective", "")),
+                    subject_id=payload.get("subject_id"),
+                    task_id=payload.get("task_id"),
+                    document_id=payload.get("document_id"),
+                    maximum_sources=4,
+                    maximum_context_characters=4200,
+                )
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/study/explanations":
+                payload = self._read_json()
+                topic = str(payload.get("topic", "")).strip()
+                subject_id = int(payload.get("subject_id"))
+                document_id = payload.get("document_id")
+                result = self._run_tool("generate_study_material", {
+                    "topic": topic,
+                    "subject_id": subject_id,
+                    "document_id": document_id,
+                    "mode": "explanation",
+                    "difficulty": payload.get("difficulty", "intermedio"),
+                    "item_count": 5,
+                    "maximum_sources": 4,
+                    "maximum_context_characters": 4500,
+                    "maximum_output_tokens": 650,
+                })
+                if not result.get("ok"):
+                    self._send_json(result, 502)
+                    return
+                if not result.get("generated"):
+                    self._send_json(result, 422)
+                    return
+                conversation = create_conversation(
+                    title=f"Explicación · {topic}"[:180],
+                    subject_id=subject_id,
+                    document_id=document_id,
+                    context_type="document" if document_id is not None else "subject",
+                )
+                append_message(conversation["id"], "user", f"Explícame {topic} paso a paso.")
+                append_message(
+                    conversation["id"],
+                    "assistant",
+                    str(result.get("content") or ""),
+                    sources=result.get("sources") or [],
+                )
+                self._send_json({
+                    "ok": True,
+                    "conversation_id": conversation["id"],
+                    "topic": topic,
+                    "explanation": result.get("content"),
+                    "sources": result.get("sources") or [],
+                    "retrieval": {
+                        "top_k": 4,
+                        "source_count": result.get("source_count", 0),
+                        "context_characters": result.get("context_characters", 0),
+                        "document_filtered": document_id is not None,
+                    },
+                    "usage": result.get("usage"),
+                }, 201)
+                return
+
+            if parsed.path == "/api/study/flashcards":
+                payload = self._read_json()
+                topic = str(payload.get("topic", "")).strip()
+                subject_id = int(payload.get("subject_id"))
+                document_id = payload.get("document_id")
+                item_count = max(5, min(10, int(payload.get("item_count", 8))))
+                existing = reusable_flashcards(
+                    subject_id=subject_id,
+                    topic=topic,
+                    document_id=document_id,
+                    maximum_items=item_count,
+                )
+                if len(existing) >= 5:
+                    self._send_json({
+                        "ok": True,
+                        "topic": topic,
+                        "cards": existing,
+                        "reused": True,
+                        "provider_called": False,
+                        "source_count": len(existing[0].get("sources") or []) if existing else 0,
+                    })
+                    return
+                result = self._run_tool("generate_study_material", {
+                    "topic": topic,
+                    "subject_id": subject_id,
+                    "document_id": document_id,
+                    "mode": "flashcards",
+                    "difficulty": payload.get("difficulty", "intermedio"),
+                    "item_count": item_count,
+                    "maximum_sources": 4,
+                    "maximum_context_characters": 4500,
+                    "maximum_output_tokens": 900,
+                })
+                if not result.get("ok"):
+                    self._send_json(result, 502)
+                    return
+                if not result.get("generated"):
+                    self._send_json(result, 422)
+                    return
+                validation = result.get("structured_output_validation") or {}
+                content = result.get("content") or {}
+                cards = content.get("items") if isinstance(content, dict) else None
+                if not validation.get("valid") or not isinstance(cards, list):
+                    self._send_json({"ok": False, "error": validation.get("error") or "El lote de flashcards no es válido"}, 502)
+                    return
+                saved = persist_flashcards(
+                    subject_id=subject_id,
+                    topic=topic,
+                    cards=cards,
+                    sources=result.get("sources") or [],
+                    document_id=document_id,
+                )
+                if not saved.get("ok"):
+                    self._send_json(saved, 400)
+                    return
+                self._send_json({
+                    "ok": True,
+                    "topic": topic,
+                    "cards": saved["cards"],
+                    "reused": saved["reused"],
+                    "provider_called": result.get("provider_called", False),
+                    "source_count": result.get("source_count", 0),
+                    "usage": result.get("usage"),
+                }, 201)
+                return
+
+            if parsed.path.startswith("/api/study/flashcards/") and parsed.path.endswith("/rate"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 5:
+                    self._send_json({"ok": False, "error": "Ruta de flashcard inválida"}, 404)
+                    return
+                review_item_id = int(path_parts[3])
+                payload = self._read_json()
+                rating = str(payload.get("rating", "")).casefold()
+                rating_map = {
+                    "difficult": {"correct": False, "confidence": 1},
+                    "good": {"correct": True, "confidence": 3},
+                    "easy": {"correct": True, "confidence": 5},
+                }
+                if rating not in rating_map:
+                    self._send_json({"ok": False, "error": "rating debe ser difficult, good o easy"}, 400)
+                    return
+                result = self._run_tool("submit_review_result", {
+                    "review_item_id": review_item_id,
+                    **rating_map[rating],
+                })
+                self._send_json(result, 200 if result.get("ok") else 400)
                 return
 
             if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/materials"):

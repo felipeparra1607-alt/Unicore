@@ -64,6 +64,7 @@ export default function App() {
   const [selectedSubjectId, setSelectedSubjectId] = React.useState<number | null>(null);
   const [pendingWorkAction, setPendingWorkAction] = React.useState<DecisionAction | null>(null);
   const [agentLaunchContext, setAgentLaunchContext] = React.useState<{ subjectId: number; subjectName: string; documentId?: number; documentTitle?: string } | null>(null);
+  const [studyLaunchContext, setStudyLaunchContext] = React.useState<{ subjectId: number; subjectName: string; documentId?: number; topic?: string } | null>(null);
   const [workSession, setWorkSession] = React.useState<StoredWorkSession | null>(() => {
     try {
       const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
@@ -82,6 +83,7 @@ export default function App() {
       setWorkSession(null);
     }
     if (nextSection === "agent") setAgentLaunchContext(null);
+    if (nextSection === "study") setStudyLaunchContext(null);
     setSection(nextSection);
     if (nextSection !== "subjects") setSelectedSubjectId(null);
   };
@@ -141,12 +143,12 @@ export default function App() {
         selectedSubjectId == null ? (
           <SubjectsPage onSelect={setSelectedSubjectId} />
         ) : (
-          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} onOpenAgent={openDocumentInAgent} />
+          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} onOpenAgent={openDocumentInAgent} onStartStudy={(subjectName) => { setStudyLaunchContext({ subjectId: selectedSubjectId, subjectName }); setSection("study"); }} />
         )
       ) : section === "tasks" ? (
         <TasksPage onRequestWorkBlock={setPendingWorkAction} onNavigate={selectSection} />
       ) : section === "study" ? (
-        <StudyPage />
+        <StudyPage launchContext={studyLaunchContext} />
       ) : section === "goals" ? (
         <GoalsPage />
       ) : section === "knowledge" ? (

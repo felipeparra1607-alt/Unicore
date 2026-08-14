@@ -283,7 +283,8 @@ def register_study_tools(mcp) -> None:
     def preview_study_context(
         topic: str,
         subject_id: int,
-        maximum_sources: int = 5,
+        document_id: int | None = None,
+        maximum_sources: int = 4,
         maximum_context_characters: int = 6000,
         minimum_score: float = 0.20,
         semantic_weight: float = 0.75,
@@ -302,10 +303,17 @@ def register_study_tools(mcp) -> None:
                 "error": "El tema no puede estar vacío",
             }
 
+        if maximum_sources < 1 or maximum_sources > 4:
+            return {
+                "ok": False,
+                "error": "maximum_sources debe estar entre 1 y 4",
+            }
+
         try:
             ranked_chunks = retrieve_ranked_chunks(
                 query=clean_topic,
                 subject_id=subject_id,
+                document_id=document_id,
                 semantic_weight=semantic_weight,
             )
 
@@ -335,6 +343,7 @@ def register_study_tools(mcp) -> None:
             "ok": True,
             "topic": clean_topic,
             "subject_id": subject_id,
+            "document_id": document_id,
             "evidence": evidence,
             "source_count": len(selected_chunks),
             "context_characters": len(context),
@@ -353,8 +362,9 @@ def register_study_tools(mcp) -> None:
         mode: str = "explanation",
         difficulty: str = "intermedio",
         item_count: int = 5,
+        document_id: int | None = None,
         provider: str | None = None,
-        maximum_sources: int = 5,
+        maximum_sources: int = 4,
         maximum_context_characters: int = 6000,
         maximum_output_tokens: int | None = None,
         minimum_score: float = 0.20,
@@ -411,11 +421,11 @@ def register_study_tools(mcp) -> None:
                 ),
             }
 
-        if maximum_sources < 1 or maximum_sources > 20:
+        if maximum_sources < 1 or maximum_sources > 4:
             return {
                 "ok": False,
                 "error": (
-                    "maximum_sources debe estar entre 1 y 20"
+                    "maximum_sources debe estar entre 1 y 4"
                 ),
             }
 
@@ -443,6 +453,7 @@ def register_study_tools(mcp) -> None:
             ranked_chunks = retrieve_ranked_chunks(
                 query=clean_topic,
                 subject_id=subject_id,
+                document_id=document_id,
                 semantic_weight=semantic_weight,
             )
 
@@ -619,6 +630,7 @@ def register_study_tools(mcp) -> None:
             "generated": True,
             "topic": clean_topic,
             "subject_id": subject_id,
+            "document_id": document_id,
             "mode": clean_mode,
             "difficulty": clean_difficulty,
             "item_count": (

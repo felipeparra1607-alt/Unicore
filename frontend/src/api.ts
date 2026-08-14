@@ -350,6 +350,64 @@ export function sendAgentMessage(message: string, options: AgentMessageOptions =
   });
 }
 
+export type PromptBuildResponse = {
+  ok: boolean;
+  prompt: string;
+  sources: AgentSource[];
+  context: {
+    subject_id: number | null; subject_name: string | null;
+    task_id: number | null; task_title: string | null;
+    document_id: number | null; document_title: string | null;
+    professor_criteria_count: number; rubric_criteria_count: number;
+  };
+  retrieval: {
+    top_k: number; source_count: number; context_characters: number;
+    subject_filtered: boolean; document_filtered: boolean; provider_called: boolean;
+  };
+};
+
+export function buildAcademicPrompt(input: { objective: string; subject_id?: number | null; task_id?: number | null; document_id?: number | null }): Promise<PromptBuildResponse> {
+  return requestJson<PromptBuildResponse>("/api/prompts/build", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export type StudyExplanationResponse = {
+  ok: boolean; conversation_id: string; topic: string; explanation: string; sources: AgentSource[];
+  retrieval: { top_k: number; source_count: number; context_characters: number; document_filtered: boolean };
+  usage?: { input_tokens: number | null; output_tokens: number | null; total_tokens: number | null };
+};
+
+export type Flashcard = {
+  id: number; subject_id: number; topic: string; question: string; correct_answer: string;
+  sources: AgentSource[]; status: string; repetition_count: number; interval_days: number;
+};
+
+export type FlashcardBatchResponse = {
+  ok: boolean; topic: string; cards: Flashcard[]; reused: boolean; provider_called: boolean;
+  source_count: number; usage?: { input_tokens: number | null; output_tokens: number | null; total_tokens: number | null };
+};
+
+export function startExplanation(input: { subject_id: number; topic: string; document_id?: number | null; difficulty?: string }): Promise<StudyExplanationResponse> {
+  return requestJson<StudyExplanationResponse>("/api/study/explanations", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+}
+
+export function startFlashcards(input: { subject_id: number; topic: string; document_id?: number | null; item_count?: number; difficulty?: string }): Promise<FlashcardBatchResponse> {
+  return requestJson<FlashcardBatchResponse>("/api/study/flashcards", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+}
+
+export function rateFlashcard(reviewItemId: number, rating: "difficult" | "good" | "easy"): Promise<{ ok: boolean }> {
+  return requestJson(`/api/study/flashcards/${reviewItemId}/rate`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating }),
+  });
+}
+
 export function getConversations(): Promise<{ ok: boolean; count: number; conversations: ConversationSummary[] }> {
   return requestJson("/api/conversations");
 }
