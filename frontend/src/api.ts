@@ -248,6 +248,41 @@ export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
   return requestJson<KnowledgeData>(`/api/subjects/${subjectId}/knowledge`);
 }
 
+export type ProfessorData = {
+  ok: boolean;
+  subject: { id: number; name: string };
+  professors: Array<{ id: number; name: string; public_profile_url: string | null; notes: string | null }>;
+  preferences: Array<{
+    id: number; professor_id: number; professor_name: string | null; category: string;
+    preference: string; importance: number; source_type: string; source_reference: string | null;
+    confidence: number;
+  }>;
+  rubric_criteria: Array<{
+    id: number; professor_id: number | null; assessment_id: number | null; title: string;
+    description: string | null; weight_percentage: number | null; maximum_points: number | null;
+    notes: string | null;
+  }>;
+};
+
+export type SubjectDocumentsData = {
+  ok: boolean;
+  subject: { id: number; name: string };
+  count: number;
+  documents: Array<{
+    id: number; title: string; file_type: string | null; document_type: string | null;
+    subject_id: number | null; has_extracted_text: boolean; character_count: number;
+    chunk_count: number; created_at: string | null;
+  }>;
+};
+
+export function getSubjectProfessor(subjectId: number): Promise<ProfessorData> {
+  return requestJson<ProfessorData>(`/api/subjects/${subjectId}/professor`);
+}
+
+export function getSubjectDocuments(subjectId: number): Promise<SubjectDocumentsData> {
+  return requestJson<SubjectDocumentsData>(`/api/subjects/${subjectId}/documents`);
+}
+
 export type Assessment = {
   id: number;
   subject_id: number;
@@ -270,6 +305,72 @@ export function sendAgentMessage(message: string, conversationId?: string): Prom
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, conversation_id: conversationId }),
+  });
+}
+
+export type StudySessionInput = {
+  subject_id: number;
+  duration_minutes: number;
+  activity_type: "quiz" | "flashcards" | "quick_review" | "summary" | "explanation" | "reading" | "class_notes" | "project" | "other";
+  session_date?: string;
+  topic?: string | null;
+  notes?: string | null;
+  planned_minutes?: number | null;
+  completed_plan?: boolean;
+  focus_rating?: number | null;
+  difficulty_rating?: number | null;
+  satisfaction_rating?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+};
+
+export function createStudySession(input: StudySessionInput): Promise<{ ok: boolean; study_session: StudySession }> {
+  return requestJson("/api/study-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export type TaskFileProposal = {
+  title: string | null;
+  subject_id: number | null;
+  task_type: string | null;
+  priority: number | null;
+  due_date: string | null;
+  estimated_minutes: number | null;
+  description: string | null;
+  notes: string | null;
+  detected_requirements: string[] | null;
+  evidence: Record<string, string | null> | null;
+};
+
+export type TaskFileAnalysis = {
+  ok: boolean;
+  file: { name: string; extension: string; character_count: number };
+  proposal: TaskFileProposal;
+  subjects: Array<{ id: number; name: string }>;
+  analysis_mode: "read_only_agent";
+};
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      resolve(result.includes(",") ? result.slice(result.indexOf(",") + 1) : result);
+    };
+    reader.onerror = () => reject(new Error("No se pudo leer el archivo seleccionado."));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function analyzeTaskFile(file: File, subjectId?: number | null): Promise<TaskFileAnalysis> {
+  const contentBase64 = await fileToBase64(file);
+  return requestJson<TaskFileAnalysis>("/api/task-files/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_name: file.name, content_base64: contentBase64, subject_id: subjectId ?? null }),
   });
 }
 
