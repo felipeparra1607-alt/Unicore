@@ -15,6 +15,7 @@ import {
   getDecisionPlan,
   type Assessment,
   type DashboardData,
+  type DecisionAction,
   type DecisionPlan,
 } from "../api";
 import AssessmentCalendar from "./AssessmentCalendar";
@@ -55,7 +56,7 @@ function weekdayLetter(value: string) {
   return ({ Mon: "L", Tue: "M", Wed: "X", Thu: "J", Fri: "V", Sat: "S", Sun: "D" } as Record<string, string>)[value] ?? value;
 }
 
-export default function Dashboard() {
+export default function Dashboard({ onRequestWorkBlock }: { onRequestWorkBlock: (action: DecisionAction) => void }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [plan, setPlan] = useState<DecisionPlan | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,7 +162,7 @@ export default function Dashboard() {
             <div>
               <p className="uc-eyebrow">Prioridad ahora</p>
               <span className="uc-priority-badge">
-                {topAction ? `${topAction.priority} · score ${topAction.score.toFixed(0)}/100` : "Sin prioridad urgente"}
+                {topAction ? topAction.reasons[0] ?? `Prioridad ${topAction.priority}` : "Sin prioridad urgente"}
               </span>
             </div>
             <span className="uc-priority-score">01</span>
@@ -173,21 +174,13 @@ export default function Dashboard() {
               <p>{topAction?.reasons?.join(" ") ?? "Puedes usar este tiempo para repasar, organizar materiales o adelantar trabajo."}</p>
             </div>
             {topAction ? (
-              <button className="uc-primary-action" disabled title="Disponible al integrar sesiones de estudio">
-                Empezar bloque de {topAction.allocated_minutes} min <ArrowRight size={17} />
+              <button className="uc-primary-action" onClick={() => onRequestWorkBlock(topAction)}>
+                Empezar bloque <ArrowRight size={17} />
               </button>
             ) : null}
           </div>
 
-          <div className="uc-priority-progress">
-            <div className="uc-priority-progress-meta">
-              <span>Prioridad calculada por Decision Engine</span>
-              <strong>{topAction ? `${topAction.score.toFixed(0)}%` : "0%"}</strong>
-            </div>
-            <div className="uc-progress-track">
-              <div className="uc-progress-fill" style={{ width: `${topAction?.score ?? 0}%` }} />
-            </div>
-          </div>
+          {topAction && <div className="uc-priority-progress"><div className="uc-priority-progress-meta"><span>Tiempo sugerido por el plan actual</span><strong>{topAction.allocated_minutes} min</strong></div></div>}
         </article>
 
         <aside className="uc-level-block">
@@ -250,7 +243,7 @@ export default function Dashboard() {
                 <div className="uc-action-index">{String(index + 2).padStart(2, "0")}</div>
                 <div className="uc-action-main">
                   <strong>{action.title}</strong>
-                  <span>{action.subject_name ?? "UniCore"} · {action.allocated_minutes} min · score {action.score.toFixed(0)}</span>
+                  <span>{action.subject_name ?? "UniCore"} · {action.allocated_minutes} min · {action.reasons[0] ?? `prioridad ${action.priority}`}</span>
                 </div>
                 <Clock3 size={16} />
               </div>

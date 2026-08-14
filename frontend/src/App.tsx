@@ -11,6 +11,10 @@ import AgentPage from "./pages/AgentPage";
 import JobsPage from "./pages/JobsPage";
 import SettingsPage from "./pages/SettingsPage";
 import GoalsPage from "./pages/GoalsPage";
+import WorkSessionPage from "./pages/WorkSessionPage";
+import WorkBlockDialog from "./components/WorkBlockDialog";
+import type { DecisionAction } from "./api";
+import { WORK_SESSION_STORAGE_KEY, type StoredWorkSession } from "./workSession";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -58,13 +62,31 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
 export default function App() {
   const [section, setSection] = React.useState<SectionId>("dashboard");
   const [selectedSubjectId, setSelectedSubjectId] = React.useState<number | null>(null);
+  const [pendingWorkAction, setPendingWorkAction] = React.useState<DecisionAction | null>(null);
+  const [workSession, setWorkSession] = React.useState<StoredWorkSession | null>(() => {
+    try {
+      const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
+      return stored ? JSON.parse(stored) as StoredWorkSession : null;
+    } catch {
+      window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
+      return null;
+    }
+  });
 
   const selectSection = (nextSection: SectionId) => {
+    if (workSession) {
+      window.alert("Hay un bloque de trabajo activo. Finalízalo antes de cambiar de sección; el cronómetro está protegido.");
+      return;
+    }
     setSection(nextSection);
     if (nextSection !== "subjects") setSelectedSubjectId(null);
   };
 
   const handleSearchNavigate = (destination: SearchDestination) => {
+    if (workSession) {
+      window.alert("Hay un bloque de trabajo activo. Finalízalo antes de abrir otro resultado.");
+      return;
+    }
     if (destination.kind === "subject") {
       setSelectedSubjectId(destination.subjectId);
       setSection("subjects");
@@ -74,10 +96,38 @@ export default function App() {
     setSection(destination.kind === "task" ? "tasks" : "knowledge");
   };
 
+  const updateWorkSession = React.useCallback((nextSession: StoredWorkSession) => {
+    setWorkSession(nextSession);
+    window.localStorage.setItem(WORK_SESSION_STORAGE_KEY, JSON.stringify(nextSession));
+  }, []);
+
+  const startWorkSession = (durationMinutes: number) => {
+    if (!pendingWorkAction) return;
+    const remainingMs = durationMinutes * 60_000;
+    const nextSession: StoredWorkSession = {
+      action: pendingWorkAction,
+      durationMinutes,
+      startedAt: new Date().toISOString(),
+      deadline: Date.now() + remainingMs,
+      remainingMs,
+      running: true,
+    };
+    updateWorkSession(nextSession);
+    setPendingWorkAction(null);
+  };
+
+  const closeWorkSession = () => {
+    window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
+    setWorkSession(null);
+    setSection("dashboard");
+  };
+
   return (
     <Layout active={section} onSection={selectSection} onSearchNavigate={handleSearchNavigate}>
-      {section === "dashboard" ? (
-        <Dashboard />
+      {workSession ? (
+        <WorkSessionPage session={workSession} onChange={updateWorkSession} onClose={closeWorkSession} />
+      ) : section === "dashboard" ? (
+        <Dashboard onRequestWorkBlock={setPendingWorkAction} />
       ) : section === "subjects" ? (
         selectedSubjectId == null ? (
           <SubjectsPage onSelect={setSelectedSubjectId} />
@@ -85,7 +135,7 @@ export default function App() {
           <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} />
         )
       ) : section === "tasks" ? (
-        <TasksPage />
+        <TasksPage onRequestWorkBlock={setPendingWorkAction} onNavigate={selectSection} />
       ) : section === "study" ? (
         <StudyPage />
       ) : section === "goals" ? (
@@ -107,6 +157,7 @@ export default function App() {
           <span>Se construirá sobre el backend real en los siguientes bloques.</span>
         </section>
       )}
+      {pendingWorkAction && <WorkBlockDialog action={pendingWorkAction} onClose={() => setPendingWorkAction(null)} onStart={startWorkSession} />}
     </Layout>
   );
 }
