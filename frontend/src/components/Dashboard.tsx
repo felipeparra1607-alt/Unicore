@@ -19,6 +19,7 @@ import {
   type DecisionPlan,
 } from "../api";
 import AssessmentCalendar from "./AssessmentCalendar";
+import AIUsagePanel from "./AIUsagePanel";
 import Card from "./Card";
 import {
   GradeTrendChart,
@@ -225,6 +226,8 @@ export default function Dashboard({ onRequestWorkBlock, onOpenSubjects }: { onRe
         <StudyMinutesChart activity={data.daily_activity} totalMinutes={data.metrics.study_minutes_last_7_days} />
         <ReadinessChart boss={data.next_boss} />
       </section>
+
+      <AIUsagePanel />
 
       <section className="uc-dashboard-grid uc-dashboard-grid-middle">
         <Card eyebrow="Plan inmediato" title="Después de esta prioridad" className="uc-next-actions">

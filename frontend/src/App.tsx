@@ -13,6 +13,8 @@ import SettingsPage from "./pages/SettingsPage";
 import GoalsPage from "./pages/GoalsPage";
 import WorkSessionPage from "./pages/WorkSessionPage";
 import WorkBlockDialog from "./components/WorkBlockDialog";
+import ProfessorsPage from "./pages/ProfessorsPage";
+import TranscriptsPage from "./pages/TranscriptsPage";
 import type { DecisionAction, SubjectDocumentsData } from "./api";
 import { WORK_SESSION_STORAGE_KEY, type StoredWorkSession } from "./workSession";
 
@@ -41,6 +43,16 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
     eyebrow: "Conocimiento",
     title: "Mapa de dominio académico",
     body: "Esta vista visualizará el Knowledge Map con conceptos dominados, parciales, débiles y pendientes de evaluación.",
+  },
+  professors: {
+    eyebrow: "Profesores",
+    title: "Professor Intelligence",
+    body: "Criterios, evidencias y asignaturas asociadas.",
+  },
+  transcripts: {
+    eyebrow: "Transcripciones",
+    title: "Memoria de clase",
+    body: "Transcripciones manuales hoy y captura de audio en una integración futura.",
   },
   agent: {
     eyebrow: "UniCore Agent",
@@ -153,6 +165,10 @@ export default function App() {
         <GoalsPage />
       ) : section === "knowledge" ? (
         <KnowledgePage />
+      ) : section === "professors" ? (
+        <ProfessorsPage />
+      ) : section === "transcripts" ? (
+        <TranscriptsPage />
       ) : section === "agent" ? (
         <AgentPage launchContext={agentLaunchContext} />
       ) : section === "jobs" ? (

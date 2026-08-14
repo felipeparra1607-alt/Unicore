@@ -250,7 +250,7 @@ export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
 
 export type ProfessorData = {
   ok: boolean;
-  subject: { id: number; name: string };
+  subject: { id: number; name: string; academic_language?: "English" | "Spanish" };
   professors: Array<{ id: number; name: string; public_profile_url: string | null; notes: string | null }>;
   preferences: Array<{
     id: number; professor_id: number; professor_name: string | null; category: string;
@@ -270,6 +270,7 @@ export type SubjectDocumentsData = {
   count: number;
   documents: Array<{
     id: number; title: string; file_type: string | null; document_type: string | null;
+    academic_year: string | null; semester: string | null; professor_id: number | null;
     subject_id: number | null; has_extracted_text: boolean; character_count: number;
     chunk_count: number; created_at: string | null;
   }>;
@@ -289,12 +290,12 @@ export function getSubjectDocuments(subjectId: number): Promise<SubjectDocuments
   return requestJson<SubjectDocumentsData>(`/api/subjects/${subjectId}/documents`);
 }
 
-export async function uploadSubjectMaterial(subjectId: number, file: File): Promise<{ ok: boolean; duplicate: boolean; message: string; document: SubjectDocumentsData["documents"][number] }> {
+export async function uploadSubjectMaterial(subjectId: number, file: File, metadata: { document_type?: string; academic_year?: string | null; semester?: string | null; professor_id?: number | null } = {}): Promise<{ ok: boolean; duplicate: boolean; message: string; document: SubjectDocumentsData["documents"][number] }> {
   const contentBase64 = await fileToBase64(file);
   return requestJson(`/api/subjects/${subjectId}/materials`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_name: file.name, content_base64: contentBase64 }),
+    body: JSON.stringify({ file_name: file.name, content_base64: contentBase64, ...metadata }),
   });
 }
 
@@ -325,7 +326,8 @@ export type AgentSource = { source_number: number; document_id: number; document
 export type ConversationMessage = { id: number; role: "user" | "assistant"; content: string; sources: AgentSource[]; created_at: string };
 export type ConversationSummary = { id: string; title: string; context_type: "general" | "subject" | "document" | "work_session"; subject_id: number | null; document_id: number | null; summary_available: boolean; message_count: number; created_at: string; updated_at: string };
 export type ConversationDetail = ConversationSummary & { messages: ConversationMessage[] };
-export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; sources: AgentSource[]; context_usage: { used: boolean; top_k: number; source_count: number; context_characters: number; subject_filtered: boolean; document_filtered: boolean }; job?: { status: string; kind: string; objective: string; created_at: string } };
+export type TokenUsage = { available: boolean; input_tokens: number | null; output_tokens: number | null; total_tokens: number | null };
+export type AgentResponse = { ok: boolean; answer: string | null; status: string; conversation_id: string; error: string | null; sources: AgentSource[]; usage?: TokenUsage; context_usage: { used: boolean; top_k: number; source_count: number; context_characters: number; subject_filtered: boolean; document_filtered: boolean }; job?: { status: string; kind: string; objective: string; created_at: string } };
 
 export type AgentMessageOptions = {
   conversationId?: string;
@@ -363,10 +365,12 @@ export type PromptBuildResponse = {
   retrieval: {
     top_k: number; source_count: number; context_characters: number;
     subject_filtered: boolean; document_filtered: boolean; provider_called: boolean;
+    historical_source_count?: number;
   };
+  context_selection?: { professor: boolean; rubric: boolean; academic_memory: boolean; improvements: boolean; strengths: boolean; estimated_load: "Bajo" | "Medio" | "Alto" };
 };
 
-export function buildAcademicPrompt(input: { objective: string; subject_id?: number | null; task_id?: number | null; document_id?: number | null }): Promise<PromptBuildResponse> {
+export function buildAcademicPrompt(input: { objective: string; subject_id?: number | null; task_id?: number | null; document_id?: number | null; include_professor?: boolean; include_rubric?: boolean; include_academic_memory?: boolean; include_improvements?: boolean; include_strengths?: boolean }): Promise<PromptBuildResponse> {
   return requestJson<PromptBuildResponse>("/api/prompts/build", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -377,17 +381,25 @@ export function buildAcademicPrompt(input: { objective: string; subject_id?: num
 export type StudyExplanationResponse = {
   ok: boolean; conversation_id: string; topic: string; explanation: string; sources: AgentSource[];
   retrieval: { top_k: number; source_count: number; context_characters: number; document_filtered: boolean };
-  usage?: { input_tokens: number | null; output_tokens: number | null; total_tokens: number | null };
+  usage?: TokenUsage;
 };
 
 export type Flashcard = {
   id: number; subject_id: number; topic: string; question: string; correct_answer: string;
   sources: AgentSource[]; status: string; repetition_count: number; interval_days: number;
+  leitner_box: number; leitner_name: string; cognitive_level: string; concept_name: string | null;
+  last_reviewed_at?: string | null; next_review_at?: string | null; subject_name?: string | null;
+};
+
+export type FlashcardDraft = {
+  id: number; subject_id: number; document_id: number | null; topic: string; question: string;
+  correct_answer: string; sources: AgentSource[]; cognitive_level: string; answer_mode: string;
+  probable_duplicate: boolean; status: string; rejection_reason: string | null;
 };
 
 export type FlashcardBatchResponse = {
-  ok: boolean; topic: string; cards: Flashcard[]; reused: boolean; provider_called: boolean;
-  source_count: number; usage?: { input_tokens: number | null; output_tokens: number | null; total_tokens: number | null };
+  ok: boolean; topic: string; cards: Flashcard[]; drafts?: FlashcardDraft[]; reused: boolean; provider_called: boolean;
+  source_count: number; usage?: TokenUsage;
 };
 
 export function startExplanation(input: { subject_id: number; topic: string; document_id?: number | null; difficulty?: string }): Promise<StudyExplanationResponse> {
@@ -396,7 +408,7 @@ export function startExplanation(input: { subject_id: number; topic: string; doc
   });
 }
 
-export function startFlashcards(input: { subject_id: number; topic: string; document_id?: number | null; item_count?: number; difficulty?: string }): Promise<FlashcardBatchResponse> {
+export function startFlashcards(input: { subject_id: number; topic: string; document_id?: number | null; item_count?: number; difficulty?: string; cognitive_level?: string; answer_mode?: string }): Promise<FlashcardBatchResponse> {
   return requestJson<FlashcardBatchResponse>("/api/study/flashcards", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
@@ -406,6 +418,19 @@ export function rateFlashcard(reviewItemId: number, rating: "difficult" | "good"
   return requestJson(`/api/study/flashcards/${reviewItemId}/rate`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating }),
   });
+}
+
+export function decideFlashcardDraft(draftId: number, accept: boolean, rejectionReason?: string): Promise<{ ok: boolean; accepted: boolean; card?: Flashcard }> {
+  return requestJson(`/api/study/flashcard-drafts/${draftId}/decision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept, rejection_reason: rejectionReason }) });
+}
+
+export function moveFlashcard(reviewItemId: number, targetBox?: number, reviewEarlier = false): Promise<{ ok: boolean; card: Flashcard }> {
+  return requestJson(`/api/study/flashcards/${reviewItemId}/move`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_box: targetBox, review_earlier: reviewEarlier }) });
+}
+
+export type WrittenEvaluation = { id: number; overall_score: number; dimensions: Array<{ name: string; score: number; feedback: string }>; errors: string[]; improvements: string[]; example_improvement: string | null };
+export function evaluateFlashcardAnswer(reviewItemId: number, answer: string): Promise<{ ok: boolean; evaluation: WrittenEvaluation; usage: TokenUsage }> {
+  return requestJson(`/api/study/flashcards/${reviewItemId}/evaluate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answer }) });
 }
 
 export function getConversations(): Promise<{ ok: boolean; count: number; conversations: ConversationSummary[] }> {
@@ -485,6 +510,34 @@ export async function analyzeTaskFile(file: File, subjectId?: number | null): Pr
     body: JSON.stringify({ file_name: file.name, content_base64: contentBase64, subject_id: subjectId ?? null }),
   });
 }
+
+export type AIUsageData = {
+  ok: boolean; today: number; this_week: number;
+  daily: Array<{ date: string; input_tokens: number; output_tokens: number; total_tokens: number; request_count: number }>;
+  by_subject: Array<{ subject_id: number | null; subject_name: string; input_tokens: number; output_tokens: number; total_tokens: number; request_count: number }>;
+};
+export function getAIUsage(days = 14): Promise<AIUsageData> { return requestJson(`/api/ai-usage?days=${days}`); }
+
+export type LeitnerData = { ok: boolean; boxes: Array<{ box: number; name: string; interval_days: number; count: number; due_count: number }>; cards: Flashcard[] };
+export function getLeitner(subjectId?: number | null): Promise<LeitnerData> { return requestJson(`/api/leitner${subjectId == null ? "" : `?subject_id=${subjectId}`}`); }
+
+export type StudentDimension = { dimension: string; score: number; trend: number; status: "weakness" | "improving" | "stable" | "strength"; evidence_count: number; last_observed_at: string };
+export type StudentModelData = { ok: boolean; dimensions: StudentDimension[]; strengths: StudentDimension[]; areas_for_improvement: StudentDimension[] };
+export function getStudentModel(subjectId?: number | null): Promise<StudentModelData> { return requestJson(`/api/student-model${subjectId == null ? "" : `?subject_id=${subjectId}`}`); }
+
+export type ProfessorOverview = { id: number; name: string; notes: string | null; subjects: Array<{ id: number; name: string }>; criteria_count: number; transcript_count: number };
+export function getProfessors(): Promise<{ ok: boolean; professors: ProfessorOverview[] }> { return requestJson("/api/professors"); }
+export function assignProfessor(subjectId: number, input: { professor_id?: number; name?: string }): Promise<{ ok: boolean; professor: { id: number; name: string } }> { return requestJson(`/api/subjects/${subjectId}/professor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); }
+export function addProfessorCriterion(professorId: number, subjectId: number, text: string, importance: number): Promise<{ ok: boolean }> { return requestJson(`/api/professors/${professorId}/criteria`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject_id: subjectId, text, importance }) }); }
+export function setAcademicLanguage(subjectId: number, academicLanguage: "English" | "Spanish"): Promise<{ ok: boolean }> { return requestJson(`/api/subjects/${subjectId}/academic-language`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ academic_language: academicLanguage }) }); }
+
+export type AcademicMapData = {
+  ok: boolean;
+  concepts: Array<{ id: number; name: string; subject_id: number; subject_name: string | null; academic_year: string | null; mastery: "mastered" | "consolidating" | "not_mastered" | "unassessed"; evidence_count: number }>;
+  connections: Array<{ id: number; source: string; target: string; relationship: string; source_type: string }>;
+  student_model: StudentModelData;
+};
+export function getAcademicMap(): Promise<AcademicMapData> { return requestJson("/api/academic-map"); }
 
 export type JobSummary = { id: string; status: "pending" | "running" | "completed" | "failed"; kind: string; objective: string; created_at: string; started_at: string | null; completed_at: string | null };
 export type JobDetail = JobSummary & { context_summary: string; expected_output: string; result: string | null; error: string | null };

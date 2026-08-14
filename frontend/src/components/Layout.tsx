@@ -2,7 +2,7 @@ import {
   BarChart3,
   BookOpen,
   BrainCircuit,
-  BriefcaseBusiness,
+  AudioLines,
   CheckSquare2,
   GraduationCap,
   LayoutDashboard,
@@ -13,6 +13,7 @@ import {
   Sparkles,
   Sun,
   X,
+  UsersRound,
 } from "lucide-react";
 import React from "react";
 import { getDashboard, type DashboardData } from "../api";
@@ -25,12 +26,12 @@ const sections = [
   { id: "study", label: "Estudio", icon: BookOpen },
   { id: "goals", label: "Objetivos", icon: Goal },
   { id: "knowledge", label: "Conocimiento", icon: BarChart3 },
+  { id: "professors", label: "Profesores", icon: UsersRound },
+  { id: "transcripts", label: "Transcripciones", icon: AudioLines },
   { id: "agent", label: "Agent", icon: BrainCircuit },
-  { id: "jobs", label: "Jobs", icon: BriefcaseBusiness },
-  { id: "settings", label: "Ajustes", icon: Settings },
 ] as const;
 
-export type SectionId = (typeof sections)[number]["id"];
+export type SectionId = (typeof sections)[number]["id"] | "jobs" | "settings";
 type Theme = "light" | "dark";
 type ThemePreference = Theme | "system";
 
@@ -152,6 +153,7 @@ export default function Layout({
             <Menu size={19} />
           </button>
           {!focusMode && <GlobalSearch onNavigate={onSearchNavigate} />}
+          {!focusMode && <button className="uc-settings-shortcut" onClick={() => selectSection("settings")} aria-label="Abrir ajustes" title="Ajustes"><Settings size={16} /></button>}
           <button
             className="uc-theme-toggle"
             onClick={toggleTheme}
