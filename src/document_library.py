@@ -120,6 +120,31 @@ def prepare_document(document_id: int) -> dict:
         raise
 
 
+def prepare_document_safely(document_id: int) -> None:
+    """Ejecuta el pipeline en background sin propagar errores al servidor HTTP."""
+    try:
+        prepare_document(document_id)
+    except Exception:
+        return
+
+
+def queue_document_processing(document_id: int) -> dict:
+    """Marca un material persistido para reintento antes de lanzar el worker."""
+    with SessionLocal() as session:
+        document = session.get(Document, document_id)
+        if document is None:
+            raise ValueError("El material no existe")
+        if not Path(document.file_path).is_file():
+            raise ValueError("El archivo guardado ya no está disponible")
+        if document.processing_status == "processing":
+            raise RuntimeError("El material ya se está procesando")
+        document.processing_status = "processing"
+        document.processing_stage = "Extrayendo contenido…"
+        document.processing_error = None
+        session.commit()
+        return _serialize_document(document)
+
+
 def ingest_document_file(
     *,
     temporary_path: Path,
@@ -132,40 +157,43 @@ def ingest_document_file(
     professor_id: int | None = None,
 ) -> dict:
     """Registra un upload binario ya escrito en disco, sin cargarlo en memoria."""
-    size_bytes = temporary_path.stat().st_size if temporary_path.is_file() else 0
-    clean_name, extension = _validate_upload(file_name, size_bytes)
-    content_hash = _hash_file(temporary_path)
-    with SessionLocal() as session:
-        if session.get(Subject, subject_id) is None:
-            raise ValueError("La asignatura indicada no existe")
-        duplicate = session.scalar(select(Document).where(Document.content_hash == content_hash))
-        if duplicate is not None:
-            temporary_path.unlink(missing_ok=True)
-            if duplicate.subject_id != subject_id:
-                raise ValueError("Este material ya está guardado en otra asignatura; no se duplicó.")
-            return {"ok": True, "duplicate": True, "message": "Este material ya estaba guardado; no se volvió a procesar.", "document": _serialize_document(duplicate)}
+    final_path: Path | None = None
+    try:
+        size_bytes = temporary_path.stat().st_size if temporary_path.is_file() else 0
+        clean_name, extension = _validate_upload(file_name, size_bytes)
+        content_hash = _hash_file(temporary_path)
+        with SessionLocal() as session:
+            if session.get(Subject, subject_id) is None:
+                raise ValueError("La asignatura indicada no existe")
+            duplicate = session.scalar(select(Document).where(Document.content_hash == content_hash))
+            if duplicate is not None:
+                if duplicate.subject_id != subject_id:
+                    raise ValueError("Este material ya está guardado en otra asignatura; no se duplicó.")
+                return {"ok": True, "duplicate": True, "message": "Este material ya estaba guardado; no se volvió a procesar.", "document": _serialize_document(duplicate)}
 
-    MANAGED_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    final_path = (MANAGED_DOCUMENTS_DIR / f"{content_hash}{extension}").resolve()
-    if MANAGED_DOCUMENTS_DIR.resolve() not in final_path.parents:
-        raise ValueError("No se pudo crear una ruta segura para el archivo")
-    shutil.move(str(temporary_path), str(final_path))
-    registered = register_document_record(file_path=str(final_path), subject_id=subject_id, title=(str(title or "").strip() or Path(clean_name).stem), document_type=document_type)
-    if not registered.get("ok"):
-        final_path.unlink(missing_ok=True)
-        raise RuntimeError(registered.get("error") or "No se pudo registrar el material")
-    document_id = int(registered["document"]["id"])
-    with SessionLocal() as session:
-        document = session.get(Document, document_id)
-        document.academic_year = academic_year
-        document.semester = semester
-        document.professor_id = professor_id
-        document.processing_status = "processing"
-        document.processing_stage = "Extrayendo contenido…"
-        document.processing_error = None
-        session.commit()
-        payload = _serialize_document(document, 0)
-    return {"ok": True, "duplicate": False, "message": "Archivo guardado; UniCore lo está preparando.", "document": payload}
+        MANAGED_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        final_path = (MANAGED_DOCUMENTS_DIR / f"{content_hash}{extension}").resolve()
+        if MANAGED_DOCUMENTS_DIR.resolve() not in final_path.parents:
+            raise ValueError("No se pudo crear una ruta segura para el archivo")
+        shutil.move(str(temporary_path), str(final_path))
+        registered = register_document_record(file_path=str(final_path), subject_id=subject_id, title=(str(title or "").strip() or Path(clean_name).stem), document_type=document_type)
+        if not registered.get("ok"):
+            final_path.unlink(missing_ok=True)
+            raise RuntimeError(registered.get("error") or "No se pudo registrar el material")
+        document_id = int(registered["document"]["id"])
+        with SessionLocal() as session:
+            document = session.get(Document, document_id)
+            document.academic_year = academic_year
+            document.semester = semester
+            document.professor_id = professor_id
+            document.processing_status = "processing"
+            document.processing_stage = "Extrayendo contenido…"
+            document.processing_error = None
+            session.commit()
+            payload = _serialize_document(document, 0)
+        return {"ok": True, "duplicate": False, "message": "Archivo guardado; UniCore lo está preparando.", "document": payload}
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def ingest_document_bytes(
@@ -184,7 +212,7 @@ def ingest_document_bytes(
     MANAGED_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
     temporary_path = MANAGED_DOCUMENTS_DIR / f".legacy-{hashlib.sha256(content).hexdigest()}.uploading"
     temporary_path.write_bytes(content)
-    return ingest_document_file(
+    stored = ingest_document_file(
         temporary_path=temporary_path,
         file_name=file_name,
         subject_id=subject_id,
@@ -194,102 +222,14 @@ def ingest_document_bytes(
         semester=semester,
         professor_id=professor_id,
     )
-
-    clean_name, extension = _validate_upload(file_name, len(content))
-
-    with SessionLocal() as session:
-        if session.get(Subject, subject_id) is None:
-            raise ValueError("La asignatura indicada no existe")
-        duplicate = session.scalar(select(Document).where(Document.content_hash == content_hash))
-        if duplicate is not None:
-            if duplicate.subject_id != subject_id:
-                raise ValueError(
-                    "Este material ya está guardado en otra asignatura; no se duplicó."
-                )
-            return {
-                "ok": True,
-                "duplicate": True,
-                "message": "Este material ya estaba guardado; no se volvió a procesar.",
-                "document": _serialize_document(duplicate),
-            }
-
-    MANAGED_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    final_path = (MANAGED_DOCUMENTS_DIR / f"{content_hash}{extension}").resolve()
-    if MANAGED_DOCUMENTS_DIR.resolve() not in final_path.parents:
-        raise ValueError("No se pudo crear una ruta segura para el archivo")
-    temporary_path = final_path.with_suffix(final_path.suffix + ".uploading")
-    temporary_path.write_bytes(content)
-    temporary_path.replace(final_path)
-
-    registered_id: int | None = None
-    try:
-        registered = register_document_record(
-            file_path=str(final_path),
-            subject_id=subject_id,
-            title=(str(title or "").strip() or Path(clean_name).stem),
-            document_type=document_type,
-        )
-        if not registered.get("ok"):
-            duplicate = registered.get("document")
-            if duplicate:
-                if duplicate.get("subject_id") != subject_id:
-                    final_path.unlink(missing_ok=True)
-                    raise ValueError(
-                        "Este material ya está guardado en otra asignatura; no se duplicó."
-                    )
-                final_path.unlink(missing_ok=True)
-                return {
-                    "ok": True,
-                    "duplicate": True,
-                    "message": "Este material ya estaba guardado; no se volvió a procesar.",
-                    "document": duplicate,
-                }
-            raise RuntimeError(registered.get("error") or "No se pudo registrar el material")
-        registered_id = int(registered["document"]["id"])
-
-        extracted = extract_document_text(final_path).strip()
-        if not extracted:
-            raise ValueError("No se encontró texto extraíble. El archivo puede necesitar OCR.")
-
-        with SessionLocal() as session:
-            document = session.get(Document, registered_id)
-            if document is None:
-                raise RuntimeError("El material dejó de estar disponible durante la preparación")
-            document.extracted_text = extracted
-            document.academic_year = academic_year
-            document.semester = semester
-            document.professor_id = professor_id
-            session.commit()
-
-        chunk_result = generate_chunks_for_document(registered_id)
-        if not chunk_result.get("ok"):
-            raise RuntimeError(chunk_result.get("error") or "No se pudo preparar la búsqueda")
-
-        curriculum_result = build_curriculum_for_document(registered_id)
-        if not curriculum_result.get("ok"):
-            raise RuntimeError(curriculum_result.get("error") or "No se pudo construir el temario")
-
-        with SessionLocal() as session:
-            document = session.get(Document, registered_id)
-            if document is None:
-                raise RuntimeError("El material preparado no está disponible")
-            return {
-                "ok": True,
-                "duplicate": False,
-                "message": "Material listo para consultar con UniCore.",
-                "document": _serialize_document(document, int(chunk_result["chunk_count"])),
-                "curriculum": curriculum_result,
-            }
-    except Exception:
-        if registered_id is not None:
-            with SessionLocal() as session:
-                document = session.get(Document, registered_id)
-                if document is not None:
-                    session.delete(document)
-                    session.commit()
-        final_path.unlink(missing_ok=True)
-        temporary_path.unlink(missing_ok=True)
-        raise
+    if stored.get("duplicate"):
+        return stored
+    prepared = prepare_document(int(stored["document"]["id"]))
+    return {
+        **prepared,
+        "duplicate": False,
+        "message": "Material listo para consultar con UniCore.",
+    }
 
 
 def get_document_content(document_id: int) -> dict | None:

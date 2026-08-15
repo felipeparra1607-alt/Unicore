@@ -37,7 +37,8 @@ from src.document_library import (
     get_document_file,
     ingest_document_bytes,
     ingest_document_file,
-    prepare_document,
+    prepare_document_safely,
+    queue_document_processing,
 )
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
 from src.knowledge_map import build_subject_knowledge_map
@@ -68,6 +69,7 @@ from src.v11_services import (
     move_flashcard,
     professors_overview,
     rate_leitner_card,
+    reject_flashcard,
     record_token_usage,
     student_model,
     store_explanation_cache,
@@ -552,6 +554,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
         try:
             if parsed.path == "/api/subjects":
                 payload = self._read_json()
@@ -884,6 +887,14 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(result, 200 if result.get("ok") else 400)
                 return
 
+            if parsed.path.startswith("/api/study/flashcards/") and parsed.path.endswith("/reject"):
+                path_parts = parsed.path.strip("/").split("/")
+                review_item_id = int(path_parts[3])
+                self._read_json()
+                result = reject_flashcard(review_item_id)
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
+
             if parsed.path.startswith("/api/study/flashcard-drafts/") and parsed.path.endswith("/decision"):
                 path_parts = parsed.path.strip("/").split("/")
                 draft_id = int(path_parts[3])
@@ -961,8 +972,26 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 )
                 if not result.get("duplicate"):
                     document_id = int(result["document"]["id"])
-                    threading.Thread(target=prepare_document, args=(document_id,), daemon=True).start()
+                    threading.Thread(target=prepare_document_safely, args=(document_id,), daemon=True).start()
                 self._send_json(result, 200 if result.get("duplicate") else 202)
+                return
+
+            if parsed.path.startswith("/api/documents/") and parsed.path.endswith("/retry-processing"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 4:
+                    self._send_json({"ok": False, "error": "Ruta de material inválida"}, 404)
+                    return
+                document_id = int(path_parts[2])
+                try:
+                    queued_document = queue_document_processing(document_id)
+                except RuntimeError as error:
+                    self._send_json({"ok": False, "error": str(error)}, 409)
+                    return
+                except ValueError as error:
+                    self._send_json({"ok": False, "error": str(error)}, 404)
+                    return
+                threading.Thread(target=prepare_document_safely, args=(document_id,), daemon=True).start()
+                self._send_json({"ok": True, "message": "UniCore está reintentando preparar el archivo.", "document": queued_document}, 202)
                 return
 
             if parsed.path == "/api/conversations":

@@ -1,6 +1,6 @@
-import base64
 import json
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from urllib.request import Request, urlopen
@@ -177,6 +177,16 @@ class DemoV1EndpointTests(unittest.TestCase):
         with urlopen(request, timeout=10) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def _binary(self, path, content):
+        request = Request(
+            self.base_url + path,
+            data=content,
+            method="POST",
+            headers={"Content-Type": "text/plain"},
+        )
+        with urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
     def test_conversation_create_list_open_delete_endpoints(self):
         status, created = self._json(
             "/api/conversations",
@@ -196,25 +206,29 @@ class DemoV1EndpointTests(unittest.TestCase):
 
     def test_material_upload_open_and_duplicate_endpoints(self):
         marker = "ENDPOINT-MATERIAL-" + uuid4().hex
-        encoded = base64.b64encode(f"Contenido exclusivo {marker}.".encode()).decode()
+        content = f"Contenido exclusivo {marker}.".encode()
         document_id = None
         try:
-            status, uploaded = self._json(
-                f"/api/subjects/{self.subject_id}/materials",
-                method="POST",
-                payload={"file_name": "endpoint-demo.txt", "content_base64": encoded},
+            status, uploaded = self._binary(
+                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-demo.txt",
+                content,
             )
-            self.assertEqual(status, 201)
+            self.assertEqual(status, 202)
             document_id = uploaded["document"]["id"]
-            self.assertGreater(uploaded["document"]["chunk_count"], 0)
 
-            _, opened = self._json(f"/api/documents/{document_id}")
+            for _ in range(100):
+                _, opened = self._json(f"/api/documents/{document_id}")
+                if opened["document"]["processing_status"] != "processing":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(opened["document"]["processing_status"], "ready")
+            self.assertGreater(opened["document"]["chunk_count"], 0)
+
             self.assertIn(marker, opened["content"])
 
-            status, duplicate = self._json(
-                f"/api/subjects/{self.subject_id}/materials",
-                method="POST",
-                payload={"file_name": "endpoint-duplicate.txt", "content_base64": encoded},
+            status, duplicate = self._binary(
+                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-duplicate.txt",
+                content,
             )
             self.assertEqual(status, 200)
             self.assertTrue(duplicate["duplicate"])

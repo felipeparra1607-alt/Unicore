@@ -55,8 +55,10 @@ def _explanation_fingerprint(*, subject_id: int, document_id: int | None, allowe
     statement = select(Document.id, Document.content_hash, Document.curriculum_processed_at).where(Document.subject_id == subject_id)
     if document_id is not None:
         statement = statement.where(Document.id == document_id)
-    elif allowed_document_ids:
-        statement = statement.where(Document.id.in_(allowed_document_ids))
+    elif allowed_document_ids is not None:
+        # Una selección vacía significa que el tema todavía no tiene fuentes;
+        # no debe ampliar silenciosamente el fingerprint a toda la asignatura.
+        statement = statement.where(Document.id.in_(allowed_document_ids or [-1]))
     rows = session.execute(statement.order_by(Document.id)).all()
     stable = "|".join(f"{row.id}:{row.content_hash or ''}:{row.curriculum_processed_at or ''}" for row in rows)
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
@@ -333,7 +335,7 @@ def rate_leitner_card(
         if item is None:
             return {"ok": False, "error": "La flashcard no existe"}
         previous_box = item.leitner_box or 1
-        next_box = max(1, previous_box - 1) if clean == "difficult" else min(5, previous_box + 1)
+        next_box = max(1, previous_box - 1) if clean == "difficult" else min(5, previous_box + (2 if clean == "easy" else 1))
         item.repetition_count += 1
         item.last_reviewed_at = now
         item.last_rating = clean
@@ -348,10 +350,22 @@ def rate_leitner_card(
         return {"ok": True, "previous_box": previous_box, "card": review_item_to_dict(item)}
 
 
+def reject_flashcard(review_item_id: int, *, session_factory=SessionLocal) -> dict[str, Any]:
+    with session_factory() as session:
+        item = session.get(ReviewItem, review_item_id)
+        if item is None:
+            return {"ok": False, "error": "La flashcard no existe"}
+        item.status = "rejected"
+        item.last_rating = "rejected"
+        item.next_review_at = datetime.max
+        session.commit()
+        return {"ok": True, "rejected": True}
+
+
 def leitner_overview(*, subject_id: int | None = None, session_factory=SessionLocal) -> dict[str, Any]:
     now = datetime.utcnow()
     with session_factory() as session:
-        statement = select(ReviewItem)
+        statement = select(ReviewItem).where(ReviewItem.status != "rejected")
         if subject_id is not None:
             statement = statement.where(ReviewItem.subject_id == subject_id)
         items = list(session.scalars(statement.order_by(ReviewItem.next_review_at, ReviewItem.id)))
