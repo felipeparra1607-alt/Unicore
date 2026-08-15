@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 
 from src.chunk_tools import generate_chunks_for_document
-from src.curriculum_engine import build_curriculum_for_document, rebuild_document_curriculum
+from src.curriculum_engine import build_curriculum_for_document
 from src.database.connection import DATA_DIR, SessionLocal
 from src.database.models import (
     ClassSession,
@@ -240,6 +240,10 @@ def ingest_document_file(
             document.processing_status = "processing"
             document.processing_stage = "Extrayendo contenido…"
             document.processing_error = None
+            if clean_material_type == "official_unit":
+                subject = session.get(Subject, subject_id)
+                if subject is not None:
+                    subject.curriculum_dirty = True
             session.commit()
             payload = _serialize_document(document, 0)
         return {"ok": True, "duplicate": False, "message": "Archivo guardado; UniCore lo está preparando.", "document": payload}
@@ -353,15 +357,24 @@ def update_document_classification(
         unit = _validated_unit(
             session, subject_id=document.subject_id, unit_id=curriculum_unit_id
         )
-        before_item_ids = set(session.scalars(select(
-            CurriculumDocumentReference.curriculum_item_id
-        ).where(CurriculumDocumentReference.document_id == document_id)))
+        previous_material_type = document.material_type or "other"
+        previous_unit_id = document.curriculum_unit_id
         changed = (
             (document.material_type or "other") != clean_material_type
             or document.curriculum_unit_id != curriculum_unit_id
         )
         document.material_type = clean_material_type
         document.curriculum_unit_id = curriculum_unit_id
+        structural_change = (
+            previous_material_type == "official_unit"
+            or clean_material_type == "official_unit"
+            or previous_unit_id != curriculum_unit_id
+        )
+        if structural_change:
+            subject = session.get(Subject, document.subject_id)
+            if subject is not None:
+                subject.curriculum_dirty = True
+            document.curriculum_processed_at = None
         session.commit()
         if not changed:
             return {
@@ -371,27 +384,18 @@ def update_document_classification(
                 "document": _serialize_document(document, curriculum_unit_name=unit.name if unit else None),
             }
 
-    rebuild = rebuild_document_curriculum(document_id, session_factory=SessionLocal)
     with SessionLocal() as session:
         document = session.get(Document, document_id)
-        after_item_ids = set(session.scalars(select(
-            CurriculumDocumentReference.curriculum_item_id
-        ).where(CurriculumDocumentReference.document_id == document_id)))
-        affected = before_item_ids ^ after_item_ids
-        if affected:
-            session.execute(delete(ExplanationCache).where(
-                ExplanationCache.curriculum_item_id.in_(affected)
-            ))
         unit = session.get(CurriculumItem, document.curriculum_unit_id) if document.curriculum_unit_id else None
         chunk_count = session.scalar(select(func.count(DocumentChunk.id)).where(
             DocumentChunk.document_id == document_id
         )) or 0
         session.commit()
         return {
-            "ok": bool(rebuild.get("ok")),
+            "ok": True,
             "changed": True,
             "embeddings_reused": True,
-            "curriculum": rebuild,
+            "curriculum_dirty": structural_change,
             "document": _serialize_document(document, int(chunk_count), unit.name if unit else None),
         }
 
@@ -419,6 +423,8 @@ def delete_managed_document(document_id: int) -> bool:
         path = Path(document.file_path).expanduser().resolve()
         if managed_root not in path.parents:
             raise ValueError("Solo pueden eliminarse materiales subidos desde UniCore")
+        subject_id = document.subject_id
+        structural = (document.material_type or "other") == "official_unit"
         chunk_ids = list(session.scalars(select(DocumentChunk.id).where(
             DocumentChunk.document_id == document_id
         )))
@@ -447,6 +453,10 @@ def delete_managed_document(document_id: int) -> bool:
             FlashcardDraft.document_id == document_id
         ).values(document_id=None))
         session.delete(document)
+        if structural and subject_id is not None:
+            subject = session.get(Subject, subject_id)
+            if subject is not None:
+                subject.curriculum_dirty = True
         session.commit()
     path.unlink(missing_ok=True)
     return True

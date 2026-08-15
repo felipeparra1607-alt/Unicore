@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 
 from src.database.connection import SessionLocal
 from src.database.models import (
@@ -18,6 +18,7 @@ from src.database.models import (
     CurriculumItem,
     Document,
     DocumentChunk,
+    ExplanationCache,
     GlobalConcept,
     KnowledgeConcept,
     KnowledgeConnection,
@@ -55,6 +56,11 @@ ENRICHMENT_MATERIAL_TYPES = {
 _UNIT_NUMBER = re.compile(
     r"(?:unit|unidad|chapter|cap[ií]tulo)\s*0*(\d+)\b", re.IGNORECASE
 )
+_UNIT_RANGE = re.compile(
+    r"(?:units?|unidades?|chapters?|cap[ií]tulos?)\s*0*\d+\s*(?:-|–|—|to|a)\s*0*\d+",
+    re.IGNORECASE,
+)
+_COPY_SUFFIX = re.compile(r"\s*\(\d+\)\s*$")
 _UNIT_NOISE = {
     "unit", "unidad", "chapter", "capitulo", "revised", "updated",
     "revision", "version", "lecture", "slides", "material",
@@ -106,6 +112,130 @@ def curriculum_name_similarity(first: str, second: str) -> float:
 def unit_number(value: str) -> int | None:
     match = _UNIT_NUMBER.search(value)
     return int(match.group(1)) if match else None
+
+
+def filename_unit_number(value: str) -> int | None:
+    """Extrae una única unidad explícita del nombre, sin inferencia generativa."""
+
+    raw_stem = _COPY_SUFFIX.sub("", Path(value).stem.replace("_", " ")).strip()
+    if _UNIT_RANGE.search(raw_stem):
+        return None
+    stem = raw_stem.replace("-", " ")
+    matches = {int(match.group(1)) for match in _UNIT_NUMBER.finditer(stem)}
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _unit_topic_name(value: str) -> str:
+    match = _UNIT_HEADING.match(value.strip())
+    return " ".join((match.group(1) if match else value).strip(" -–—:").split())
+
+
+def _official_unit_anchor(
+    *,
+    document: Document,
+    selected_unit: CurriculumItem | None,
+    candidates: list[CurriculumCandidate],
+) -> tuple[str | None, str]:
+    if selected_unit is not None:
+        return selected_unit.name, "manual"
+    number = filename_unit_number(document.title)
+    if number is not None:
+        return f"Unit {number}", "filename"
+
+    # Una portada inequívoca solo ancla cuando la estructura no declara varias
+    # unidades equivalentes. En ese segundo caso conservamos el modo multi-unit.
+    early_limit = min(4000, max(800, len(document.extracted_text or "") // 8))
+    early_units = [
+        candidate for candidate in candidates
+        if candidate.item_type == "unit" and candidate.start <= early_limit
+    ]
+    all_numbers = {
+        unit_number(candidate.name)
+        for candidate in candidates
+        if candidate.item_type == "unit" and unit_number(candidate.name) is not None
+    }
+    if early_units and len(all_numbers) <= 1:
+        return early_units[0].name, "cover"
+    return None, "internal_headings"
+
+
+def _anchor_official_candidates(
+    candidates: list[CurriculumCandidate],
+    *,
+    anchor_name: str,
+    text_length: int,
+) -> list[CurriculumCandidate]:
+    """Convierte headings Unit internos en Topics bajo una autoridad única."""
+
+    anchored = [CurriculumCandidate(
+        item_type="unit",
+        name=anchor_name,
+        start=0,
+        end=text_length,
+        parent_index=None,
+        position=1,
+    )]
+    current_topic_index: int | None = None
+    anchor_number = unit_number(anchor_name)
+    topic_position = subtopic_position = 0
+    for candidate in candidates:
+        if candidate.item_type == "unit":
+            candidate_number = unit_number(candidate.name)
+            if candidate_number == anchor_number and candidate.start <= min(4000, max(800, text_length // 8)):
+                continue
+            name = _unit_topic_name(candidate.name)
+            if not name or normalize_curriculum_name(name) == normalize_curriculum_name(anchor_name):
+                continue
+            topic_position += 1
+            current_topic_index = len(anchored)
+            anchored.append(CurriculumCandidate(
+                item_type="topic",
+                name=name,
+                start=candidate.start,
+                end=candidate.end,
+                parent_index=0,
+                position=topic_position,
+                source_label=candidate.source_label,
+            ))
+            continue
+        if candidate.item_type == "topic":
+            topic_position += 1
+            current_topic_index = len(anchored)
+            anchored.append(CurriculumCandidate(
+                item_type="topic",
+                name=candidate.name,
+                start=candidate.start,
+                end=candidate.end,
+                parent_index=0,
+                position=topic_position,
+                source_label=candidate.source_label,
+            ))
+            continue
+        if candidate.item_type == "subtopic":
+            if current_topic_index is None:
+                topic_position += 1
+                current_topic_index = len(anchored)
+                anchored.append(CurriculumCandidate(
+                    item_type="topic",
+                    name=candidate.name,
+                    start=candidate.start,
+                    end=candidate.end,
+                    parent_index=0,
+                    position=topic_position,
+                    source_label=candidate.source_label,
+                ))
+            else:
+                subtopic_position += 1
+                anchored.append(CurriculumCandidate(
+                    item_type="subtopic",
+                    name=candidate.name,
+                    start=candidate.start,
+                    end=candidate.end,
+                    parent_index=current_topic_index,
+                    position=subtopic_position,
+                    source_label=candidate.source_label,
+                ))
+    return anchored
 
 
 def _unit_descriptor(value: str) -> set[str]:
@@ -450,6 +580,20 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
         ):
             return {"ok": False, "error": "La unidad relacionada no pertenece a la asignatura"}
         structural = (document.material_type or "other") in STRUCTURAL_MATERIAL_TYPES
+        anchor_name = None
+        anchor_source = "not_applicable"
+        if (document.material_type or "other") == "official_unit":
+            anchor_name, anchor_source = _official_unit_anchor(
+                document=document,
+                selected_unit=selected_unit,
+                candidates=candidates,
+            )
+            if anchor_name is not None:
+                candidates = _anchor_official_candidates(
+                    candidates,
+                    anchor_name=anchor_name,
+                    text_length=len(document.extracted_text or ""),
+                )
         current_unit = selected_unit
         skipped = 0
 
@@ -517,7 +661,7 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
                 )
                 session.add(item)
                 session.flush()
-            elif not item.manually_locked and item.parent_id is None and parent is not None:
+            elif not item.manually_locked and parent is not None and item.parent_id != parent.id:
                 item.parent_id = parent.id
             persisted.append(item)
             _attach_document_reference(
@@ -544,6 +688,7 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
             "candidate_count": len(candidates),
             "item_count": len({item.id for item in persisted if item is not None}),
             "skipped_candidate_count": skipped,
+            "unit_anchor_source": anchor_source,
         }
 
 
@@ -570,24 +715,111 @@ def rebuild_document_curriculum(document_id: int, *, session_factory=SessionLoca
 
 
 def rebuild_subject_curriculum(subject_id: int, *, session_factory=SessionLocal) -> dict[str, Any]:
-    """Acción explícita: recalcula relaciones sin borrar items ni evidencias."""
+    """Reconcilia explícitamente estructura y relaciones sin recalcular embeddings."""
 
     with session_factory() as session:
-        if session.get(Subject, subject_id) is None:
+        subject = session.get(Subject, subject_id)
+        if subject is None:
             return {"ok": False, "error": "La asignatura no existe"}
-        document_ids = list(session.scalars(select(Document.id).where(
+        documents = list(session.scalars(select(Document).where(
             Document.subject_id == subject_id,
             Document.extracted_text.is_not(None),
         ).order_by(
             (Document.material_type != "official_unit"), Document.id
         )))
+        invalid_document_ids = []
+        for document in documents:
+            if document.curriculum_unit_id is None:
+                continue
+            selected_unit = session.get(CurriculumItem, document.curriculum_unit_id)
+            if (
+                selected_unit is None
+                or selected_unit.subject_id != subject_id
+                or selected_unit.item_type != "unit"
+            ):
+                invalid_document_ids.append(document.id)
+        if invalid_document_ids:
+            subject.curriculum_dirty = True
+            session.commit()
+            return {
+                "ok": False,
+                "error": "Hay materiales con una unidad relacionada no válida",
+                "document_ids": invalid_document_ids,
+                "curriculum_dirty": True,
+                "embeddings_reused": True,
+            }
+        document_ids = [document.id for document in documents]
     results = [rebuild_document_curriculum(item, session_factory=session_factory) for item in document_ids]
+    rebuild_ok = all(item.get("ok") for item in results)
+    if not rebuild_ok:
+        with session_factory() as session:
+            subject = session.get(Subject, subject_id)
+            if subject is not None:
+                subject.curriculum_dirty = True
+                session.commit()
+        return {
+            "ok": False,
+            "subject_id": subject_id,
+            "document_count": len(document_ids),
+            "processed_count": sum(bool(item.get("ok")) for item in results),
+            "embeddings_reused": True,
+            "curriculum_dirty": True,
+            "results": results,
+        }
+    removed_item_count = 0
+    with session_factory() as session:
+        subject = session.get(Subject, subject_id)
+        items = list(session.scalars(select(CurriculumItem).where(
+            CurriculumItem.subject_id == subject_id
+        )))
+        item_by_id = {item.id: item for item in items}
+        supported = set(session.scalars(select(
+            CurriculumDocumentReference.curriculum_item_id
+        ).where(CurriculumDocumentReference.curriculum_item_id.in_(item_by_id)))) if item_by_id else set()
+        supported.update(item.id for item in items if item.manually_locked)
+        for item_id in list(supported):
+            parent_id = item_by_id.get(item_id).parent_id if item_by_id.get(item_id) else None
+            while parent_id is not None and parent_id not in supported:
+                supported.add(parent_id)
+                parent = item_by_id.get(parent_id)
+                parent_id = parent.parent_id if parent else None
+        removable = {
+            item.id for item in items
+            if item.id not in supported and item.source == "automatic" and not item.manually_locked
+        }
+        if removable:
+            session.execute(update(Document).where(
+                Document.curriculum_unit_id.in_(removable)
+            ).values(curriculum_unit_id=None))
+            session.execute(delete(ExplanationCache).where(
+                ExplanationCache.curriculum_item_id.in_(removable)
+            ))
+            session.execute(delete(CurriculumChunkReference).where(
+                CurriculumChunkReference.curriculum_item_id.in_(removable)
+            ))
+            session.execute(delete(CurriculumDocumentReference).where(
+                CurriculumDocumentReference.curriculum_item_id.in_(removable)
+            ))
+            session.execute(delete(CurriculumConceptLink).where(
+                CurriculumConceptLink.curriculum_item_id.in_(removable)
+            ))
+            for item_type in ("subtopic", "topic", "unit"):
+                result = session.execute(delete(CurriculumItem).where(
+                    CurriculumItem.id.in_(removable),
+                    CurriculumItem.item_type == item_type,
+                ))
+                removed_item_count += int(result.rowcount or 0)
+        if subject is not None:
+            subject.curriculum_dirty = False
+        session.commit()
     return {
-        "ok": all(item.get("ok") for item in results),
+        "ok": True,
         "subject_id": subject_id,
         "document_count": len(document_ids),
         "processed_count": sum(bool(item.get("ok")) for item in results),
         "embeddings_reused": True,
+        "removed_item_count": removed_item_count,
+        "curriculum_dirty": False,
     }
 
 
@@ -773,6 +1005,7 @@ def curriculum_for_subject(subject_id: int, *, session_factory=SessionLocal) -> 
             "item_count": len(items),
             "canonical_unit_count": len(units),
             "pending_document_count": int(pending_documents),
+            "curriculum_dirty": bool(subject.curriculum_dirty),
         }
 
 

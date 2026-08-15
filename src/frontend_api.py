@@ -25,6 +25,7 @@ from src.database.connection import SessionLocal
 from src.database.models import Subject
 from src.database.migrate_conversations import migrate_conversations
 from src.database.migrate_material_classification import migrate_material_classification
+from src.database.migrate_curriculum_dirty import migrate_curriculum_dirty
 from src.database.migrate_v11 import migrate_v11
 from src.curriculum_engine import (
     backfill_pending_curriculum,
@@ -1208,6 +1209,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 def main() -> None:
     migrate_v11()
     migrate_material_classification()
+    migrate_curriculum_dirty()
     migrate_conversations()
     backfill_pending_curriculum()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)
