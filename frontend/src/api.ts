@@ -222,8 +222,9 @@ export function getTasks(subjectId?: number): Promise<TasksData> {
   return requestJson<TasksData>(`/api/tasks${params}`);
 }
 
-export type NewSubjectInput = { name: string; academic_year?: string | null; description?: string | null };
-export function createSubject(input: NewSubjectInput): Promise<{ ok: boolean; subject: { id: number; name: string; academic_year: string | null; description: string | null } }> {
+export type AcademicLanguage = "English" | "Spanish";
+export type NewSubjectInput = { name: string; academic_language: AcademicLanguage; academic_year?: string | null; description?: string | null };
+export function createSubject(input: NewSubjectInput): Promise<{ ok: boolean; subject: { id: number; name: string; academic_language: AcademicLanguage; academic_year: string | null; description: string | null } }> {
   return requestJson("/api/subjects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
 }
 
@@ -250,7 +251,7 @@ export function getKnowledge(subjectId: number): Promise<KnowledgeData> {
 
 export type ProfessorData = {
   ok: boolean;
-  subject: { id: number; name: string; academic_language?: "English" | "Spanish" };
+  subject: { id: number; name: string; academic_language?: "English" | "Spanish"; academic_language_configured?: boolean };
   professors: Array<{ id: number; name: string; public_profile_url: string | null; notes: string | null }>;
   preferences: Array<{
     id: number; professor_id: number; professor_name: string | null; category: string;
@@ -380,7 +381,8 @@ export function buildAcademicPrompt(input: { objective: string; subject_id?: num
 
 export type StudyExplanationResponse = {
   ok: boolean; conversation_id: string; topic: string; explanation: string; sources: AgentSource[];
-  retrieval: { top_k: number; source_count: number; context_characters: number; document_filtered: boolean };
+  curriculum_item_id?: number | null;
+  retrieval: { top_k: number; source_count: number; context_characters: number; document_filtered: boolean; curriculum_filtered?: boolean };
   usage?: TokenUsage;
 };
 
@@ -402,13 +404,13 @@ export type FlashcardBatchResponse = {
   source_count: number; usage?: TokenUsage;
 };
 
-export function startExplanation(input: { subject_id: number; topic: string; document_id?: number | null; difficulty?: string }): Promise<StudyExplanationResponse> {
+export function startExplanation(input: { subject_id: number; curriculum_item_id: number; topic?: string; difficulty?: string }): Promise<StudyExplanationResponse> {
   return requestJson<StudyExplanationResponse>("/api/study/explanations", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
 
-export function startFlashcards(input: { subject_id: number; topic: string; document_id?: number | null; item_count?: number; difficulty?: string; cognitive_level?: string; answer_mode?: string }): Promise<FlashcardBatchResponse> {
+export function startFlashcards(input: { subject_id: number; curriculum_item_id: number; topic?: string; item_count?: number; difficulty?: string; cognitive_level?: string; answer_mode?: string }): Promise<FlashcardBatchResponse> {
   return requestJson<FlashcardBatchResponse>("/api/study/flashcards", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
@@ -527,17 +529,27 @@ export function getStudentModel(subjectId?: number | null): Promise<StudentModel
 
 export type ProfessorOverview = { id: number; name: string; notes: string | null; subjects: Array<{ id: number; name: string }>; criteria_count: number; transcript_count: number };
 export function getProfessors(): Promise<{ ok: boolean; professors: ProfessorOverview[] }> { return requestJson("/api/professors"); }
-export function assignProfessor(subjectId: number, input: { professor_id?: number; name?: string }): Promise<{ ok: boolean; professor: { id: number; name: string } }> { return requestJson(`/api/subjects/${subjectId}/professor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); }
+export function createProfessor(input: { subject_id: number; name: string; notes?: string | null }): Promise<{ ok: boolean; professor: { id: number; name: string; notes: string | null } }> { return requestJson("/api/professors", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); }
+export function assignProfessor(subjectId: number, input: { professor_id?: number; name?: string; notes?: string | null }): Promise<{ ok: boolean; professor: { id: number; name: string; notes?: string | null } }> { return requestJson(`/api/subjects/${subjectId}/professor`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }); }
 export function addProfessorCriterion(professorId: number, subjectId: number, text: string, importance: number): Promise<{ ok: boolean }> { return requestJson(`/api/professors/${professorId}/criteria`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject_id: subjectId, text, importance }) }); }
 export function setAcademicLanguage(subjectId: number, academicLanguage: "English" | "Spanish"): Promise<{ ok: boolean }> { return requestJson(`/api/subjects/${subjectId}/academic-language`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ academic_language: academicLanguage }) }); }
 
 export type AcademicMapData = {
   ok: boolean;
-  concepts: Array<{ id: number; name: string; subject_id: number; subject_name: string | null; academic_year: string | null; mastery: "mastered" | "consolidating" | "not_mastered" | "unassessed"; evidence_count: number }>;
+  concepts: Array<{ id: number; name: string; subject_id: number; subject_name: string | null; academic_year: string | null; curriculum_type?: "topic" | "subtopic" | null; global_concept?: string | null; mastery: "mastered" | "consolidating" | "not_mastered" | "unassessed"; evidence_count: number }>;
   connections: Array<{ id: number; source: string; target: string; relationship: string; source_type: string }>;
   student_model: StudentModelData;
 };
 export function getAcademicMap(): Promise<AcademicMapData> { return requestJson("/api/academic-map"); }
+
+export type CurriculumStatus = "not_studied" | "learning" | "consolidating" | "mastered";
+export type CurriculumSource = { document_id: number; title: string; file_type: string | null; source_label: string | null };
+export type CurriculumItemBase = { id: number; name: string; type: "unit" | "topic" | "subtopic"; source: "automatic" | "manual"; manually_locked: boolean; status: CurriculumStatus; sources: CurriculumSource[]; also_seen_in: Array<{ subject_id: number; subject_name: string; concept_name: string }> };
+export type CurriculumSubtopic = CurriculumItemBase & { type: "subtopic" };
+export type CurriculumTopic = CurriculumItemBase & { type: "topic"; subtopics: CurriculumSubtopic[] };
+export type CurriculumUnit = CurriculumItemBase & { type: "unit"; topics: CurriculumTopic[]; topic_count: number; worked_topic_count: number };
+export type CurriculumData = { ok: boolean; subject: { id: number; name: string; academic_language: AcademicLanguage; academic_language_configured: boolean }; units: CurriculumUnit[]; item_count: number; pending_document_count: number };
+export function getCurriculum(subjectId: number): Promise<CurriculumData> { return requestJson(`/api/subjects/${subjectId}/curriculum`); }
 
 export type JobSummary = { id: string; status: "pending" | "running" | "completed" | "failed"; kind: string; objective: string; created_at: string; started_at: string | null; completed_at: string | null };
 export type JobDetail = JobSummary & { context_summary: string; expected_output: string; result: string | null; error: string | null };

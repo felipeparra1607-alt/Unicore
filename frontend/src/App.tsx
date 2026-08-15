@@ -6,6 +6,7 @@ import SubjectsPage from "./pages/SubjectsPage";
 import SubjectDetailPage from "./pages/SubjectDetailPage";
 import TasksPage from "./pages/TasksPage";
 import StudyPage from "./pages/StudyPage";
+import EvaluationPage from "./pages/EvaluationPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import AgentPage from "./pages/AgentPage";
 import JobsPage from "./pages/JobsPage";
@@ -33,6 +34,11 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
     eyebrow: "Estudio",
     title: "Sesiones, quizzes y constancia",
     body: "Aquí vivirán las sesiones de estudio, los modos de aprendizaje, los quizzes y el historial de actividad.",
+  },
+  evaluation: {
+    eyebrow: "Evaluación",
+    title: "Práctica académica",
+    body: "Flashcards, Leitner y configuración de Quiz basados en el temario real.",
   },
   goals: {
     eyebrow: "Objetivos",
@@ -161,6 +167,8 @@ export default function App() {
         <TasksPage onRequestWorkBlock={setPendingWorkAction} onNavigate={selectSection} />
       ) : section === "study" ? (
         <StudyPage launchContext={studyLaunchContext} />
+      ) : section === "evaluation" ? (
+        <EvaluationPage />
       ) : section === "goals" ? (
         <GoalsPage />
       ) : section === "knowledge" ? (
