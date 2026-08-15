@@ -893,7 +893,11 @@ export default function WorkSessionPage({
                     ? `Pregunta sobre ${activeDocument.document.title}…`
                     : "Pregunta sobre esta actividad…"
                 }
-                rows={3}
+                rows={1}
+                onInput={(event) => {
+                  event.currentTarget.style.height = "auto";
+                  event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 104)}px`;
+                }}
                 disabled={submitting}
               />
               <button

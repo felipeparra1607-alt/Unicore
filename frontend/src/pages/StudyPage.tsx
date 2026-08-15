@@ -16,6 +16,7 @@ import {
   getCurriculum,
   getDashboard,
   getStudy,
+  rebuildSubjectCurriculum,
   startExplanation,
   sendAgentMessage,
   type AgentSource,
@@ -80,6 +81,7 @@ export default function StudyPage({
   const [active, setActive] = useState<ActiveExplanation | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentOpen, setAgentOpen] = useState(false);
   const [agentInput, setAgentInput] = useState("");
@@ -171,6 +173,33 @@ export default function StudyPage({
       );
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function refreshCurriculum() {
+    if (subjectId == null || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      await rebuildSubjectCurriculum(subjectId);
+      const [curriculumData, studyData] = await Promise.all([
+        getCurriculum(subjectId),
+        getStudy(subjectId),
+      ]);
+      setCurriculum(curriculumData);
+      setStudy(studyData);
+      setSelected(null);
+      setExpandedUnits(
+        new Set(curriculumData.units.slice(0, 1).map((unit) => unit.id)),
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo actualizar el temario.",
+      );
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -320,7 +349,7 @@ export default function StudyPage({
               </p>
               <div className="uc-explanation-agent">
                 <strong>¿Tienes alguna duda?</strong>
-                <button onClick={() => setAgentOpen(true)}><MessageCircle size={15} /> Preguntar a UniCore sobre este tema</button>
+                <button className="uc-agent-context-cta" onClick={() => setAgentOpen(true)}><MessageCircle size={15} /> Preguntar a UniCore sobre este tema</button>
               </div>
             </article>
           </section>
@@ -347,7 +376,7 @@ export default function StudyPage({
           </aside>
         </div>
         {error && <div className="uc-inline-error">{error}</div>}
-        {agentOpen && <aside className="uc-study-agent-drawer"><header><div><p className="uc-eyebrow">UniCore Agent</p><h2>Ayuda contextual</h2></div><button onClick={() => setAgentOpen(false)} aria-label="Cerrar"><X size={18} /></button></header><p>La conversación conoce el tema, la explicación y sus fuentes.</p><div className="uc-study-agent-stream">{agentMessages.length === 0 && <div className="uc-work-agent-neutral"><strong>Asistencia disponible.</strong><p>Escribe una duda concreta cuando la necesites.</p></div>}{agentMessages.map((message, index) => <article className={`uc-message is-${message.role}`} key={index}><span>{message.role === "user" ? "Tú" : "UniCore"}</span>{message.role === "agent" ? <AcademicMarkdown content={message.text} sources={message.sources} /> : <p>{message.text}</p>}</article>)}{agentBusy && <p>Consultando el contexto…</p>}</div><form onSubmit={(event) => { event.preventDefault(); void askAgent(); }}><textarea rows={3} value={agentInput} disabled={agentBusy} onChange={(event) => setAgentInput(event.target.value)} placeholder={`Pregunta sobre ${active.item.name}…`} /><button disabled={agentBusy || !agentInput.trim()} aria-label="Enviar"><Send size={16} /></button></form></aside>}
+        {agentOpen && <aside className="uc-study-agent-drawer"><header><div><p className="uc-eyebrow">UniCore Agent</p><h2>Ayuda contextual</h2></div><button onClick={() => setAgentOpen(false)} aria-label="Cerrar"><X size={18} /></button></header><p>La conversación conoce el tema, la explicación y sus fuentes.</p><div className="uc-study-agent-stream">{agentMessages.length === 0 && <div className="uc-work-agent-neutral"><strong>Asistencia disponible.</strong><p>Escribe una duda concreta cuando la necesites.</p></div>}{agentMessages.map((message, index) => <article className={`uc-message is-${message.role}`} key={index}><span>{message.role === "user" ? "Tú" : "UniCore"}</span>{message.role === "agent" ? <AcademicMarkdown content={message.text} sources={message.sources} /> : <p>{message.text}</p>}</article>)}{agentBusy && <p>Consultando el contexto…</p>}</div><form onSubmit={(event) => { event.preventDefault(); void askAgent(); }}><textarea rows={1} value={agentInput} disabled={agentBusy} onChange={(event) => setAgentInput(event.target.value)} onInput={(event) => { event.currentTarget.style.height = "auto"; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 104)}px`; }} placeholder={`Pregunta sobre ${active.item.name}…`} /><button disabled={agentBusy || !agentInput.trim()} aria-label="Enviar"><Send size={16} /></button></form></aside>}
       </div>
     );
 
@@ -362,21 +391,33 @@ export default function StudyPage({
             reconstruyas manualmente el curso.
           </p>
         </div>
-        <label className="uc-subject-select">
-          <span>Asignatura</span>
-          <select
-            value={subjectId ?? ""}
-            onChange={(event) => void loadSubject(Number(event.target.value))}
-          >
-            {dashboard.subjects.map((subject) => (
-              <option key={subject.id} value={subject.id}>
-                {subject.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="uc-study-header-actions">
+          <label className="uc-subject-select">
+            <span>Asignatura</span>
+            <select
+              value={subjectId ?? ""}
+              onChange={(event) => void loadSubject(Number(event.target.value))}
+            >
+              {dashboard.subjects.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="uc-curriculum-refresh" onClick={() => void refreshCurriculum()} disabled={refreshing}>
+            <RefreshCw size={14} className={refreshing ? "is-spinning" : ""} />
+            {refreshing ? "Actualizando…" : "Actualizar temario"}
+          </button>
+        </div>
       </header>
       {error && <div className="uc-inline-error">{error}</div>}
+      {curriculum?.curriculum_dirty && (
+        <div className="uc-curriculum-dirty">
+          <span><strong>Hay cambios en los materiales.</strong> Actualiza el temario para reflejar su estructura actual.</span>
+          <button onClick={() => void refreshCurriculum()} disabled={refreshing}>Actualizar temario</button>
+        </div>
+      )}
       {!languageReady && (
         <div className="uc-language-note">
           Idioma académico pendiente ·{" "}

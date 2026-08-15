@@ -562,6 +562,8 @@ export function rebuildSubjectCurriculum(
   ok: boolean;
   document_count: number;
   processed_count: number;
+  removed_item_count: number;
+  curriculum_dirty: boolean;
   embeddings_reused: boolean;
 }> {
   return requestJson(`/api/subjects/${subjectId}/curriculum/rebuild`, {
@@ -1205,6 +1207,7 @@ export type CurriculumData = {
   units: CurriculumUnit[];
   item_count: number;
   pending_document_count: number;
+  curriculum_dirty: boolean;
 };
 export function getCurriculum(subjectId: number): Promise<CurriculumData> {
   return requestJson(`/api/subjects/${subjectId}/curriculum`);

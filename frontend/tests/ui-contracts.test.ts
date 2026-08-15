@@ -52,3 +52,23 @@ test("Materiales exige clasificación, permite unidad y no ofrece preguntar al A
   assert.match(materials, /deleteSubjectMaterial/);
   assert.doesNotMatch(materials, /Preguntar (a UniCore|sobre este material)/);
 });
+
+test("Estudio actualiza el temario explícitamente y distingue la ayuda contextual", async () => {
+  const [study, agent, work, api, styles] = await Promise.all([
+    source("pages/StudyPage.tsx"),
+    source("pages/AgentPage.tsx"),
+    source("pages/WorkSessionPage.tsx"),
+    source("api.ts"),
+    source("styles.css"),
+  ]);
+  assert.match(study, /rebuildSubjectCurriculum/);
+  assert.match(study, /curriculum\?\.curriculum_dirty/);
+  assert.match(study, /Actualizar temario/);
+  assert.match(api, /curriculum_dirty: boolean/);
+  assert.match(study, /uc-agent-context-cta/);
+  assert.match(styles, /\.uc-agent-context-cta[^}]*var\(--chart-blue\)/);
+  assert.match(styles, /max-height: 104px/);
+  assert.match(agent, /rows=\{1\}/);
+  assert.match(work, /rows=\{1\}/);
+  assert.match(study, /Math\.min\(event\.currentTarget\.scrollHeight, 104\)/);
+});
