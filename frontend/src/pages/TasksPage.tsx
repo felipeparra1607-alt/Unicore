@@ -99,11 +99,11 @@ function decisionPriorityLabel(value: DecisionAction["priority"]) {
 }
 
 export default function TasksPage({
-  onStartWorkPlan,
-  onNavigate,
+  onStartSession,
+  focusedTaskId,
 }: {
-  onStartWorkPlan: (actions: DecisionAction[], duration: number) => void;
-  onNavigate: (section: SectionId) => void;
+  onStartSession: () => void;
+  focusedTaskId?: number | null;
 }) {
   const [data, setData] = useState<TasksData | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -134,25 +134,8 @@ export default function TasksPage({
     setLoading(true);
     setError(null);
     try {
-      const [tasks, nextPlan, subjects] = await Promise.all([
-        getTasks(),
-        getDecisionPlan(duration, 5),
-        getDashboard(),
-      ]);
-      const ids = [
-        ...new Set(
-          nextPlan.actions.flatMap((action) =>
-            action.subject_id == null ? [] : [action.subject_id],
-          ),
-        ),
-      ];
-      const curricula = (
-        await Promise.allSettled(ids.map(getCurriculum))
-      ).flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+      const [tasks, subjects] = await Promise.all([getTasks(), getDashboard()]);
       setData(tasks);
-      setPlanActions(composePlan(nextPlan.actions, plannerMode, curricula));
       setDashboard(subjects);
     } catch (caught) {
       setError(
@@ -335,18 +318,6 @@ export default function TasksPage({
     }
   }
 
-  function navigateAction(action: DecisionAction) {
-    onNavigate(
-      action.type === "task"
-        ? "tasks"
-        : action.type === "review"
-          ? "study"
-          : action.type === "knowledge"
-            ? "knowledge"
-            : "subjects",
-    );
-  }
-
   function removeFromCurrentSession(index: number) {
     setPlanActions((current) =>
       current.filter((_, actionIndex) => actionIndex !== index),
@@ -357,6 +328,10 @@ export default function TasksPage({
   useEffect(() => {
     void loadTasks();
   }, []);
+  useEffect(() => {
+    if (focusedTaskId == null || loading) return;
+    window.setTimeout(() => document.getElementById(`task-${focusedTaskId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  }, [focusedTaskId, loading]);
   const tasks = useMemo(
     () =>
       (data?.tasks ?? []).filter(({ task }) =>
@@ -413,6 +388,9 @@ export default function TasksPage({
           </p>
         </div>
         <div className="uc-page-actions">
+          <button className="uc-primary-action" onClick={onStartSession}>
+            <Play size={16} /> Empezar sesión
+          </button>
           <button className="uc-new-subject" onClick={openCreate}>
             <Plus size={16} /> Nueva tarea
           </button>
@@ -444,7 +422,7 @@ export default function TasksPage({
         </div>
       </section>
 
-      <section className="uc-planner-block">
+      {false && <section className="uc-planner-block">
         <div className="uc-planner-copy">
           <p className="uc-eyebrow">Plan de trabajo</p>
           <h2>Construye una sesión completa.</h2>
@@ -562,9 +540,7 @@ export default function TasksPage({
                     <p>{action.reasons.join(" ")}</p>
                   </div>
                   <div className="uc-plan-actions">
-                    <button onClick={() => navigateAction(action)}>
-                      Abrir
-                    </button>
+                    <button>Abrir</button>
                     <button
                       className="uc-plan-remove"
                       onClick={() => removeFromCurrentSession(index)}
@@ -592,7 +568,7 @@ export default function TasksPage({
                 </div>
                 <button
                   className="uc-primary-action"
-                  onClick={() => onStartWorkPlan(planActions, duration)}
+                  onClick={() => undefined}
                 >
                   <Play size={15} /> Iniciar bloque
                 </button>
@@ -605,7 +581,7 @@ export default function TasksPage({
             </div>
           )}
         </div>
-      </section>
+      </section>}
 
       <section className="uc-task-register">
         <div className="uc-task-register-head">
@@ -647,7 +623,8 @@ export default function TasksPage({
           <div className="uc-task-list">
             {tasks.map(({ task }) => (
               <article
-                className={`uc-task-row ${task.is_overdue ? "is-overdue" : ""}`}
+                id={`task-${task.id}`}
+                className={`uc-task-row ${task.is_overdue ? "is-overdue" : ""} ${focusedTaskId === task.id ? "is-focused" : ""}`}
                 key={task.id}
               >
                 <div className="uc-task-priority">

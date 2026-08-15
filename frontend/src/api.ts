@@ -447,6 +447,9 @@ export type SubjectDocumentsData = {
     title: string;
     file_type: string | null;
     document_type: string | null;
+    material_type: MaterialType;
+    curriculum_unit_id: number | null;
+    curriculum_unit_name: string | null;
     academic_year: string | null;
     semester: string | null;
     professor_id: number | null;
@@ -460,6 +463,17 @@ export type SubjectDocumentsData = {
     processing_error?: string | null;
   }>;
 };
+
+export type MaterialType =
+  | "official_unit"
+  | "class_notes"
+  | "personal_summary"
+  | "assignment"
+  | "required_reading"
+  | "supplementary"
+  | "past_exam"
+  | "rubric"
+  | "other";
 
 export type DocumentContent = {
   ok: boolean;
@@ -484,6 +498,8 @@ export async function uploadSubjectMaterial(
   file: File,
   _metadata: {
     document_type?: string;
+    material_type?: MaterialType;
+    curriculum_unit_id?: number | null;
     academic_year?: string | null;
     semester?: string | null;
     professor_id?: number | null;
@@ -495,8 +511,13 @@ export async function uploadSubjectMaterial(
   document: SubjectDocumentsData["documents"][number];
 }> {
   try {
+    const query = new URLSearchParams({ file_name: file.name });
+    if (_metadata.material_type)
+      query.set("material_type", _metadata.material_type);
+    if (_metadata.curriculum_unit_id != null)
+      query.set("curriculum_unit_id", String(_metadata.curriculum_unit_id));
     return await requestJson(
-      `/api/subjects/${subjectId}/materials?file_name=${encodeURIComponent(file.name)}`,
+      `/api/subjects/${subjectId}/materials?${query.toString()}`,
       {
         method: "POST",
         headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -508,6 +529,44 @@ export async function uploadSubjectMaterial(
       throw new Error("No se pudo conectar con UniCore durante la subida.");
     throw error;
   }
+}
+
+export function updateDocumentClassification(
+  documentId: number,
+  classification: {
+    material_type: MaterialType;
+    curriculum_unit_id: number | null;
+  },
+): Promise<{
+  ok: boolean;
+  changed: boolean;
+  embeddings_reused: boolean;
+  document: SubjectDocumentsData["documents"][number];
+}> {
+  return requestJson(`/api/documents/${documentId}/classification`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(classification),
+  });
+}
+
+export function deleteSubjectMaterial(
+  documentId: number,
+): Promise<{ ok: boolean; document_id: number }> {
+  return requestJson(`/api/documents/${documentId}`, { method: "DELETE" });
+}
+
+export function rebuildSubjectCurriculum(
+  subjectId: number,
+): Promise<{
+  ok: boolean;
+  document_count: number;
+  processed_count: number;
+  embeddings_reused: boolean;
+}> {
+  return requestJson(`/api/subjects/${subjectId}/curriculum/rebuild`, {
+    method: "POST",
+  });
 }
 
 export function retryDocumentProcessing(
@@ -1106,6 +1165,7 @@ export type CurriculumSource = {
   document_id: number;
   title: string;
   file_type: string | null;
+  material_type?: MaterialType;
   source_label: string | null;
 };
 export type CurriculumItemBase = {
@@ -1121,6 +1181,7 @@ export type CurriculumItemBase = {
     subject_name: string;
     concept_name: string;
   }>;
+  merged_item_ids?: number[];
 };
 export type CurriculumSubtopic = CurriculumItemBase & { type: "subtopic" };
 export type CurriculumTopic = CurriculumItemBase & {

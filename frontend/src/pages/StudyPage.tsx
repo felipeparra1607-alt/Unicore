@@ -5,7 +5,10 @@ import {
   ChevronRight,
   FileText,
   Link2,
+  MessageCircle,
   RefreshCw,
+  Send,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -14,6 +17,7 @@ import {
   getDashboard,
   getStudy,
   startExplanation,
+  sendAgentMessage,
   type AgentSource,
   type CurriculumData,
   type CurriculumStatus,
@@ -58,17 +62,11 @@ const shortDate = (value: string) =>
 export default function StudyPage({
   launchContext,
   onConfigureSubject,
-  onAskAgent,
+  onFocusChange,
 }: {
   launchContext?: StudyLaunchContext;
   onConfigureSubject: (subjectId: number) => void;
-  onAskAgent: (context: {
-    subjectId: number;
-    subjectName: string;
-    topic: string;
-    explanation: string;
-    sources: AgentSource[];
-  }) => void;
+  onFocusChange: (active: boolean) => void;
 }) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [study, setStudy] = useState<StudyData | null>(null);
@@ -83,6 +81,11 @@ export default function StudyPage({
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentMessages, setAgentMessages] = useState<Array<{ role: "user" | "agent"; text: string; sources?: AgentSource[] }>>([]);
+  const [conversationId, setConversationId] = useState<string>();
+  const [agentBusy, setAgentBusy] = useState(false);
 
   async function loadSubject(id: number) {
     setSubjectId(id);
@@ -159,6 +162,7 @@ export default function StudyPage({
         cacheHit: result.cache?.hit ?? false,
         startedAt: Date.now(),
       });
+      onFocusChange(true);
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -173,6 +177,8 @@ export default function StudyPage({
   async function finishExplanation() {
     if (!active || subjectId == null) {
       setActive(null);
+      setAgentOpen(false);
+      onFocusChange(false);
       return;
     }
     const minutes = Math.max(
@@ -204,6 +210,18 @@ export default function StudyPage({
           : "No se pudo registrar la sesión.",
       );
     }
+  }
+
+  async function askAgent() {
+    if (!agentInput.trim() || subjectId == null || !active || agentBusy) return;
+    const question = agentInput.trim();
+    setAgentInput(""); setAgentMessages((current) => [...current, { role: "user", text: question }]); setAgentBusy(true);
+    try {
+      const result = await sendAgentMessage(question, { conversationId, subjectId, contextType: "work_session", workContext: { topic: active.item.name, explanation: active.content, source_document_ids: active.sources.map((source) => source.document_id) } });
+      setConversationId(result.conversation_id);
+      setAgentMessages((current) => [...current, { role: "agent", text: result.answer ?? result.error ?? "No pude preparar una respuesta.", sources: result.sources }]);
+    } catch (caught) { setAgentMessages((current) => [...current, { role: "agent", text: caught instanceof Error ? caught.message : "No se pudo consultar a UniCore." }]); }
+    finally { setAgentBusy(false); }
   }
 
   function toggleUnit(id: number) {
@@ -264,7 +282,7 @@ export default function StudyPage({
 
   if (active)
     return (
-      <div className="uc-page-shell uc-live-study uc-curriculum-explanation">
+      <div className={`uc-page-shell uc-live-study uc-curriculum-explanation ${agentOpen ? "is-agent-open" : ""}`}>
         <header>
           <button
             className="uc-back-link"
@@ -302,20 +320,7 @@ export default function StudyPage({
               </p>
               <div className="uc-explanation-agent">
                 <strong>¿Tienes alguna duda?</strong>
-                <button
-                  onClick={() =>
-                    subjectId != null &&
-                    onAskAgent({
-                      subjectId,
-                      subjectName: curriculum?.subject.name ?? "Asignatura",
-                      topic: active.item.name,
-                      explanation: active.content,
-                      sources: active.sources,
-                    })
-                  }
-                >
-                  ✦ Preguntar a UniCore sobre este tema
-                </button>
+                <button onClick={() => setAgentOpen(true)}><MessageCircle size={15} /> Preguntar a UniCore sobre este tema</button>
               </div>
             </article>
           </section>
@@ -342,6 +347,7 @@ export default function StudyPage({
           </aside>
         </div>
         {error && <div className="uc-inline-error">{error}</div>}
+        {agentOpen && <aside className="uc-study-agent-drawer"><header><div><p className="uc-eyebrow">UniCore Agent</p><h2>Ayuda contextual</h2></div><button onClick={() => setAgentOpen(false)} aria-label="Cerrar"><X size={18} /></button></header><p>La conversación conoce el tema, la explicación y sus fuentes.</p><div className="uc-study-agent-stream">{agentMessages.length === 0 && <div className="uc-work-agent-neutral"><strong>Asistencia disponible.</strong><p>Escribe una duda concreta cuando la necesites.</p></div>}{agentMessages.map((message, index) => <article className={`uc-message is-${message.role}`} key={index}><span>{message.role === "user" ? "Tú" : "UniCore"}</span>{message.role === "agent" ? <AcademicMarkdown content={message.text} sources={message.sources} /> : <p>{message.text}</p>}</article>)}{agentBusy && <p>Consultando el contexto…</p>}</div><form onSubmit={(event) => { event.preventDefault(); void askAgent(); }}><textarea rows={3} value={agentInput} disabled={agentBusy} onChange={(event) => setAgentInput(event.target.value)} placeholder={`Pregunta sobre ${active.item.name}…`} /><button disabled={agentBusy || !agentInput.trim()} aria-label="Enviar"><Send size={16} /></button></form></aside>}
       </div>
     );
 

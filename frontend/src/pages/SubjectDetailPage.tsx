@@ -20,7 +20,6 @@ import {
   type DecisionAction,
   type DecisionPlan,
   type ProfessorData,
-  type SubjectDocumentsData,
 } from "../api";
 import SubjectAcademicCalendar from "../components/SubjectAcademicCalendar";
 import MaterialLibrary from "../components/MaterialLibrary";
@@ -44,16 +43,11 @@ export default function SubjectDetailPage({
   subjectId,
   onBack,
   onNavigate,
-  onOpenAgent,
   onStartStudy,
 }: {
   subjectId: number;
   onBack: () => void;
   onNavigate: (section: SectionId) => void;
-  onOpenAgent: (
-    document: SubjectDocumentsData["documents"][number],
-    subjectName: string,
-  ) => void;
   onStartStudy: (subjectName: string) => void;
 }) {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -180,6 +174,9 @@ export default function SubjectDetailPage({
           </p>
         </div>
         <div className="uc-subject-header-actions">
+          <button className="uc-language-chip" onClick={() => setProfessorOpen(true)}>
+            Idioma · {professor?.subject.academic_language ?? "Sin configurar"}
+          </button>
           <button
             className="uc-primary-action"
             onClick={() => onStartStudy(subject.name)}
@@ -351,16 +348,6 @@ export default function SubjectDetailPage({
           </span>
           <ArrowRight size={16} />
         </button>
-        <button onClick={() => setProfessorOpen(true)}>
-          <span>
-            <small>Idioma académico</small>
-            <strong>
-              {professor?.subject.academic_language ?? "Sin configurar"}
-            </strong>
-            <em>Editar</em>
-          </span>
-          <ArrowRight size={16} />
-        </button>
       </section>
       {professorError && (
         <div className="uc-inline-error">{professorError}</div>
@@ -466,10 +453,7 @@ export default function SubjectDetailPage({
           loading={calendarLoading}
         />
       </section>
-      <MaterialLibrary
-        subjectId={subjectId}
-        onAsk={(document) => onOpenAgent(document, subject.name)}
-      />
+      <MaterialLibrary subjectId={subjectId} />
     </div>
   );
 }

@@ -17,7 +17,8 @@ import WorkBlockDialog from "./components/WorkBlockDialog";
 import ProfessorsPage from "./pages/ProfessorsPage";
 import TranscriptsPage from "./pages/TranscriptsPage";
 import UpcomingPage from "./pages/UpcomingPage";
-import type { DecisionAction, SubjectDocumentsData } from "./api";
+import SessionBuilderPage from "./pages/SessionBuilderPage";
+import type { DecisionAction } from "./api";
 import {
   normalizeStoredWorkSession,
   WORK_SESSION_STORAGE_KEY,
@@ -96,6 +97,9 @@ export default function App() {
   const [selectedSubjectId, setSelectedSubjectId] = React.useState<
     number | null
   >(null);
+  const [focusedTaskId, setFocusedTaskId] = React.useState<number | null>(null);
+  const [sessionBuilder, setSessionBuilder] = React.useState(false);
+  const [studyFocusMode, setStudyFocusMode] = React.useState(false);
   const [pendingWorkAction, setPendingWorkAction] =
     React.useState<DecisionAction | null>(null);
   const [agentLaunchContext, setAgentLaunchContext] = React.useState<{
@@ -139,6 +143,11 @@ export default function App() {
     }
     if (nextSection === "agent") setAgentLaunchContext(null);
     if (nextSection === "study") setStudyLaunchContext(null);
+    if (sessionBuilder) {
+      setSessionBuilder(false);
+      window.history.pushState({}, "", "/");
+    }
+    if (nextSection !== "study") setStudyFocusMode(false);
     setSection(nextSection);
     if (nextSection !== "subjects") setSelectedSubjectId(null);
   };
@@ -206,25 +215,12 @@ export default function App() {
     setSection("dashboard");
   };
 
-  const openDocumentInAgent = (
-    document: SubjectDocumentsData["documents"][number],
-    subjectName: string,
-  ) => {
-    setAgentLaunchContext({
-      subjectId: document.subject_id!,
-      subjectName,
-      documentId: document.id,
-      documentTitle: document.title,
-    });
-    setSection("agent");
-  };
-
   return (
     <Layout
       active={section}
       onSection={selectSection}
       onSearchNavigate={handleSearchNavigate}
-      focusMode={Boolean(workSession)}
+      focusMode={Boolean(workSession) || studyFocusMode}
     >
       {workSession ? (
         <WorkSessionPage
@@ -232,10 +228,16 @@ export default function App() {
           onChange={updateWorkSession}
           onClose={closeWorkSession}
         />
+      ) : sessionBuilder ? (
+        <SessionBuilderPage
+          onBack={() => { setSessionBuilder(false); setSection("tasks"); window.history.pushState({}, "", "/"); }}
+          onStart={(actions, duration) => { setSessionBuilder(false); startWorkPlan(actions, duration); }}
+        />
       ) : section === "dashboard" ? (
         <Dashboard
           onOpenSubjects={() => selectSection("subjects")}
           onOpenTasks={() => selectSection("tasks")}
+          onOpenTask={(taskId) => { setFocusedTaskId(taskId); setSection("tasks"); }}
         />
       ) : section === "subjects" ? (
         selectedSubjectId == null ? (
@@ -245,7 +247,6 @@ export default function App() {
             subjectId={selectedSubjectId}
             onBack={() => setSelectedSubjectId(null)}
             onNavigate={selectSection}
-            onOpenAgent={openDocumentInAgent}
             onStartStudy={(subjectName) => {
               setStudyLaunchContext({
                 subjectId: selectedSubjectId,
@@ -256,17 +257,14 @@ export default function App() {
           />
         )
       ) : section === "tasks" ? (
-        <TasksPage onStartWorkPlan={startWorkPlan} onNavigate={selectSection} />
+        <TasksPage focusedTaskId={focusedTaskId} onStartSession={() => { setSessionBuilder(true); window.history.pushState({}, "", "/session/new"); }} />
       ) : section === "study" ? (
         <StudyPage
           launchContext={studyLaunchContext}
+          onFocusChange={setStudyFocusMode}
           onConfigureSubject={(subjectId) => {
             setSelectedSubjectId(subjectId);
             setSection("subjects");
-          }}
-          onAskAgent={(context) => {
-            setAgentLaunchContext(context);
-            setSection("agent");
           }}
         />
       ) : section === "evaluation" ? (

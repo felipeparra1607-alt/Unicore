@@ -28,14 +28,27 @@ test("Home no duplica el planner y Goals no presenta preparación", async () => 
   assert.match(goals, /weeklyMinutesFor/);
 });
 
-test("Planner permite quitar solo del plan actual y Flashcards mantiene modos", async () => {
+test("Tareas delega la planificación al Session Builder y Flashcards mantiene modos", async () => {
   const tasks = await source("pages/TasksPage.tsx");
+  const builder = await source("pages/SessionBuilderPage.tsx");
   const cards = await source("pages/EvaluationPage.tsx");
-  assert.match(tasks, /removeFromCurrentSession/);
-  assert.match(tasks, /Quitar .* de esta sesión/);
+  assert.match(tasks, /Empezar sesión/);
+  assert.match(builder, /Crear manualmente/);
+  assert.match(builder, /Usar recomendación/);
+  assert.match(builder, /getDecisionPlan/);
+  assert.match(builder, /unit_id/);
   assert.match(cards, /No la sabía/);
   assert.match(cards, /La sabía/);
   assert.match(cards, /La dominaba/);
   assert.match(cards, /Rechazar pregunta/);
   assert.match(cards, /answerMode === "mixed" && cardIndex % 2 === 1/);
+});
+
+test("Materiales exige clasificación, permite unidad y no ofrece preguntar al Agent", async () => {
+  const materials = await source("components/MaterialLibrary.tsx");
+  assert.match(materials, /Tipo de material · obligatorio/);
+  assert.match(materials, /Unidad relacionada · opcional/);
+  assert.match(materials, /updateDocumentClassification/);
+  assert.match(materials, /deleteSubjectMaterial/);
+  assert.doesNotMatch(materials, /Preguntar (a UniCore|sobre este material)/);
 });

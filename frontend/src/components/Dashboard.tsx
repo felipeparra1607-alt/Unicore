@@ -83,9 +83,11 @@ function weekdayLetter(value: string) {
 export default function Dashboard({
   onOpenSubjects,
   onOpenTasks,
+  onOpenTask,
 }: {
   onOpenSubjects: () => void;
   onOpenTasks: () => void;
+  onOpenTask: (taskId: number) => void;
 }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [tasks, setTasks] = useState<TasksData | null>(null);
@@ -223,7 +225,7 @@ export default function Dashboard({
                     · prioridad {task.priority}
                   </span>
                 </div>
-                <button onClick={onOpenTasks}>Abrir</button>
+                <button onClick={() => onOpenTask(task.id)}>Abrir</button>
               </article>
             ))}
           </div>

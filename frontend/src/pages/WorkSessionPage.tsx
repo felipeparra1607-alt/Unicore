@@ -522,7 +522,7 @@ export default function WorkSessionPage({
       .slice(0, 3) ?? [];
 
   return (
-    <div className="uc-page-shell uc-work-page">
+    <div className={`uc-page-shell uc-work-page ${drawerOpen ? "is-agent-open" : ""}`}>
       <header className="uc-work-header">
         <div>
           <p className="uc-eyebrow">
