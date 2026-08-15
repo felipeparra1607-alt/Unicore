@@ -41,6 +41,24 @@ _DECIMAL_UNIT_HEADING = re.compile(
 _WORD = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOPWORDS = {"and", "the", "of", "de", "del", "la", "las", "los", "y", "el", "a", "an"}
 _RANK = {"unit": 1, "topic": 2, "subtopic": 3}
+STRUCTURAL_MATERIAL_TYPES = {"official_unit"}
+ENRICHMENT_MATERIAL_TYPES = {
+    "class_notes",
+    "personal_summary",
+    "required_reading",
+    "supplementary",
+    "assignment",
+    "rubric",
+    "past_exam",
+    "other",
+}
+_UNIT_NUMBER = re.compile(
+    r"(?:unit|unidad|chapter|cap[ií]tulo)\s*0*(\d+)\b", re.IGNORECASE
+)
+_UNIT_NOISE = {
+    "unit", "unidad", "chapter", "capitulo", "revised", "updated",
+    "revision", "version", "lecture", "slides", "material",
+}
 
 
 @dataclass
@@ -83,6 +101,63 @@ def curriculum_name_similarity(first: str, second: str) -> float:
     if min(len(first_tokens), len(second_tokens)) >= 2 and score >= 2 / 3:
         return score
     return 0.0
+
+
+def unit_number(value: str) -> int | None:
+    match = _UNIT_NUMBER.search(value)
+    return int(match.group(1)) if match else None
+
+
+def _unit_descriptor(value: str) -> set[str]:
+    number = unit_number(value)
+    return {
+        token
+        for token in normalize_curriculum_name(value).split()
+        if token not in _UNIT_NOISE and token != str(number or "")
+    }
+
+
+def units_are_strong_match(first: str, second: str) -> bool:
+    """Matching conservador: mismo número y títulos no contradictorios."""
+
+    first_number, second_number = unit_number(first), unit_number(second)
+    if first_number is None or first_number != second_number:
+        return False
+    first_descriptor, second_descriptor = _unit_descriptor(first), _unit_descriptor(second)
+    if not first_descriptor or not second_descriptor:
+        return True
+    overlap = first_descriptor & second_descriptor
+    return bool(overlap) and len(overlap) / len(first_descriptor | second_descriptor) >= 0.5
+
+
+def find_canonical_unit(session, *, subject_id: int, name: str) -> tuple[CurriculumItem | None, str]:
+    exact = session.scalar(select(CurriculumItem).where(
+        CurriculumItem.subject_id == subject_id,
+        CurriculumItem.item_type == "unit",
+        CurriculumItem.normalized_name == normalize_curriculum_name(name),
+    ))
+    if exact is not None:
+        return exact, "exact"
+    number = unit_number(name)
+    if number is None:
+        return None, "no_number"
+    numbered = [
+        item
+        for item in session.scalars(select(CurriculumItem).where(
+            CurriculumItem.subject_id == subject_id,
+            CurriculumItem.item_type == "unit",
+        ))
+        if unit_number(item.name) == number
+    ]
+    strong = [item for item in numbered if units_are_strong_match(name, item.name)]
+    if len(strong) == 1:
+        return strong[0], "strong"
+    if len(strong) > 1:
+        normalized = {item.normalized_name for item in strong}
+        if len(normalized) == 1:
+            return min(strong, key=lambda item: item.id), "strong"
+        return None, "ambiguous"
+    return None, "ambiguous" if numbered else "no_match"
 
 
 def _looks_like_plain_heading(line: str, next_line: str | None, previous_was_source: bool) -> bool:
@@ -225,6 +300,8 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
 
 
 def _find_equivalent_item(session, *, subject_id: int, item_type: str, name: str) -> CurriculumItem | None:
+    if item_type == "unit":
+        return find_canonical_unit(session, subject_id=subject_id, name=name)[0]
     exact = session.scalar(select(CurriculumItem).where(
         CurriculumItem.subject_id == subject_id,
         CurriculumItem.item_type == item_type,
@@ -232,8 +309,6 @@ def _find_equivalent_item(session, *, subject_id: int, item_type: str, name: str
     ))
     if exact is not None:
         return exact
-    if item_type == "unit":
-        return None
     candidates = session.scalars(select(CurriculumItem).where(
         CurriculumItem.subject_id == subject_id,
         CurriculumItem.item_type == item_type,
@@ -241,6 +316,35 @@ def _find_equivalent_item(session, *, subject_id: int, item_type: str, name: str
     scored = [(curriculum_name_similarity(name, item.name), item) for item in candidates]
     score, item = max(scored, default=(0.0, None), key=lambda pair: pair[0])
     return item if score >= 2 / 3 else None
+
+
+def _attach_document_reference(
+    session,
+    *,
+    item: CurriculumItem,
+    document: Document,
+    chunks: list[DocumentChunk],
+    candidate: CurriculumCandidate,
+    document_reference_item_ids: set[int],
+    chunk_reference_keys: set[tuple[int, int]],
+) -> None:
+    if item.id not in document_reference_item_ids:
+        session.add(CurriculumDocumentReference(
+            curriculum_item_id=item.id,
+            document_id=document.id,
+            source_label=candidate.source_label,
+        ))
+        document_reference_item_ids.add(item.id)
+    for chunk in chunks:
+        if chunk.char_end <= candidate.start or chunk.char_start >= candidate.end:
+            continue
+        reference_key = (item.id, chunk.id)
+        if reference_key not in chunk_reference_keys:
+            session.add(CurriculumChunkReference(
+                curriculum_item_id=item.id,
+                chunk_id=chunk.id,
+            ))
+            chunk_reference_keys.add(reference_key)
 
 
 def _add_connection(session, first_id: int, second_id: int, relationship: str, evidence: str) -> None:
@@ -339,23 +443,75 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
             .join(DocumentChunk, DocumentChunk.id == CurriculumChunkReference.chunk_id)
             .where(DocumentChunk.document_id == document.id)
         ).all())
-        persisted: list[CurriculumItem] = []
+        persisted: list[CurriculumItem | None] = []
+        selected_unit = session.get(CurriculumItem, document.curriculum_unit_id) if document.curriculum_unit_id else None
+        if selected_unit is not None and (
+            selected_unit.subject_id != document.subject_id or selected_unit.item_type != "unit"
+        ):
+            return {"ok": False, "error": "La unidad relacionada no pertenece a la asignatura"}
+        structural = (document.material_type or "other") in STRUCTURAL_MATERIAL_TYPES
+        current_unit = selected_unit
+        skipped = 0
 
         for candidate in candidates:
             parent = persisted[candidate.parent_index] if candidate.parent_index is not None else None
+            candidate_name = candidate.name
+            if candidate.item_type == "unit" and candidate.name.startswith("Material ·"):
+                candidate_name = Path(document.title).stem
+            if candidate.item_type == "unit":
+                if selected_unit is not None:
+                    item = selected_unit
+                else:
+                    item, _match = find_canonical_unit(
+                        session, subject_id=document.subject_id, name=candidate_name
+                    )
+                    if item is None and structural:
+                        item = CurriculumItem(
+                            subject_id=document.subject_id,
+                            parent_id=None,
+                            item_type="unit",
+                            name=candidate_name,
+                            normalized_name=normalize_curriculum_name(candidate_name),
+                            position=candidate.position,
+                            source="automatic",
+                        )
+                        session.add(item)
+                        session.flush()
+                    if item is None:
+                        persisted.append(None)
+                        skipped += 1
+                        current_unit = None
+                        continue
+                current_unit = item
+                persisted.append(item)
+                _attach_document_reference(
+                    session, item=item, document=document, chunks=chunks,
+                    candidate=candidate,
+                    document_reference_item_ids=document_reference_item_ids,
+                    chunk_reference_keys=chunk_reference_keys,
+                )
+                session.flush()
+                continue
+
+            if parent is None:
+                parent = current_unit
             item = _find_equivalent_item(
                 session,
                 subject_id=document.subject_id,
                 item_type=candidate.item_type,
-                name=candidate.name,
+                name=candidate_name,
             )
             if item is None:
+                if not structural or parent is None:
+                    persisted.append(None)
+                    skipped += 1
+                    continue
                 item = CurriculumItem(
                     subject_id=document.subject_id,
                     parent_id=parent.id if parent else None,
                     item_type=candidate.item_type,
-                    name=candidate.name,
-                    normalized_name=normalize_curriculum_name(candidate.name),
+                    name=candidate_name,
+                    normalized_name=normalize_curriculum_name(candidate_name),
                     position=candidate.position,
                     source="automatic",
                 )
@@ -364,23 +520,12 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
             elif not item.manually_locked and item.parent_id is None and parent is not None:
                 item.parent_id = parent.id
             persisted.append(item)
-
-            if item.id not in document_reference_item_ids:
-                session.add(CurriculumDocumentReference(
-                    curriculum_item_id=item.id,
-                    document_id=document.id,
-                    source_label=candidate.source_label,
-                ))
-                document_reference_item_ids.add(item.id)
-
-            for chunk in chunks:
-                overlaps = chunk.char_end > candidate.start and chunk.char_start < candidate.end
-                if not overlaps:
-                    continue
-                reference_key = (item.id, chunk.id)
-                if reference_key not in chunk_reference_keys:
-                    session.add(CurriculumChunkReference(curriculum_item_id=item.id, chunk_id=chunk.id))
-                    chunk_reference_keys.add(reference_key)
+            _attach_document_reference(
+                session, item=item, document=document, chunks=chunks,
+                candidate=candidate,
+                document_reference_item_ids=document_reference_item_ids,
+                chunk_reference_keys=chunk_reference_keys,
+            )
 
             if item.item_type in {"topic", "subtopic"}:
                 _ensure_knowledge_concept(session, item, document.title)
@@ -397,8 +542,53 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
             "processed": True,
             "document_id": document.id,
             "candidate_count": len(candidates),
-            "item_count": len({item.id for item in persisted}),
+            "item_count": len({item.id for item in persisted if item is not None}),
+            "skipped_candidate_count": skipped,
         }
+
+
+def rebuild_document_curriculum(document_id: int, *, session_factory=SessionLocal) -> dict[str, Any]:
+    """Reconstruye solo relaciones curriculares; conserva extracción y embeddings."""
+
+    with session_factory() as session:
+        document = session.get(Document, document_id)
+        if document is None:
+            return {"ok": False, "error": "El material no existe"}
+        chunk_ids = list(session.scalars(select(DocumentChunk.id).where(
+            DocumentChunk.document_id == document_id
+        )))
+        if chunk_ids:
+            session.query(CurriculumChunkReference).filter(
+                CurriculumChunkReference.chunk_id.in_(chunk_ids)
+            ).delete(synchronize_session=False)
+        session.query(CurriculumDocumentReference).filter(
+            CurriculumDocumentReference.document_id == document_id
+        ).delete(synchronize_session=False)
+        document.curriculum_processed_at = None
+        session.commit()
+    return build_curriculum_for_document(document_id, session_factory=session_factory, force=True)
+
+
+def rebuild_subject_curriculum(subject_id: int, *, session_factory=SessionLocal) -> dict[str, Any]:
+    """Acción explícita: recalcula relaciones sin borrar items ni evidencias."""
+
+    with session_factory() as session:
+        if session.get(Subject, subject_id) is None:
+            return {"ok": False, "error": "La asignatura no existe"}
+        document_ids = list(session.scalars(select(Document.id).where(
+            Document.subject_id == subject_id,
+            Document.extracted_text.is_not(None),
+        ).order_by(
+            (Document.material_type != "official_unit"), Document.id
+        )))
+    results = [rebuild_document_curriculum(item, session_factory=session_factory) for item in document_ids]
+    return {
+        "ok": all(item.get("ok") for item in results),
+        "subject_id": subject_id,
+        "document_count": len(document_ids),
+        "processed_count": sum(bool(item.get("ok")) for item in results),
+        "embeddings_reused": True,
+    }
 
 
 def backfill_pending_curriculum(*, session_factory=SessionLocal) -> dict[str, int]:
@@ -480,44 +670,88 @@ def curriculum_for_subject(subject_id: int, *, session_factory=SessionLocal) -> 
         for item in items:
             children.setdefault(item.parent_id, []).append(item)
 
-        def sources_for(item_id: int) -> list[dict[str, Any]]:
+        def sources_for(item_ids: int | list[int]) -> list[dict[str, Any]]:
+            target_ids = {item_ids} if isinstance(item_ids, int) else set(item_ids)
             result = []
+            seen: set[int] = set()
             for reference in document_refs:
-                if reference.curriculum_item_id != item_id or reference.document_id not in documents:
+                if reference.curriculum_item_id not in target_ids or reference.document_id not in documents:
                     continue
                 document = documents[reference.document_id]
+                if document.id in seen:
+                    continue
+                seen.add(document.id)
                 result.append({
                     "document_id": document.id,
                     "title": document.title,
                     "file_type": document.file_type,
+                    "material_type": document.material_type or "other",
                     "source_label": reference.source_label,
                 })
             return result
 
-        def serialize(item: CurriculumItem) -> dict[str, Any]:
-            concept = concept_by_item.get(item.id)
+        def serialize_many(group: list[CurriculumItem]) -> dict[str, Any]:
+            item = min(group, key=lambda candidate: (candidate.position, candidate.id))
+            concepts_for_group = [concept_by_item.get(candidate.id) for candidate in group]
+            concept = next((candidate for candidate in concepts_for_group if candidate is not None), None)
             also_seen = global_occurrences.get(concept.global_concept_id, []) if concept and concept.global_concept_id else []
+            statuses = [_item_status(candidate, concept_by_item.get(candidate.id), reviews, studied_names) for candidate in group]
+            status = max(statuses, key=lambda value: {
+                "not_studied": 0, "learning": 1, "consolidating": 2, "mastered": 3,
+            }[value])
             return {
                 "id": item.id,
                 "name": item.name,
                 "type": item.item_type,
                 "source": item.source,
                 "manually_locked": item.manually_locked,
-                "status": _item_status(item, concept, reviews, studied_names),
-                "sources": sources_for(item.id),
+                "status": status,
+                "sources": sources_for([candidate.id for candidate in group]),
                 "also_seen_in": also_seen,
+                "merged_item_ids": [candidate.id for candidate in group],
             }
 
+        root_units = children.get(None, [])
+        unit_groups: list[list[CurriculumItem]] = []
+        for unit in root_units:
+            matching_groups = [
+                group for group in unit_groups
+                if normalize_curriculum_name(group[0].name) == unit.normalized_name
+                or units_are_strong_match(group[0].name, unit.name)
+            ]
+            if len(matching_groups) == 1:
+                matching_groups[0].append(unit)
+            else:
+                unit_groups.append([unit])
+
+        def group_equivalent(items_to_group: list[CurriculumItem]) -> list[list[CurriculumItem]]:
+            grouped: list[list[CurriculumItem]] = []
+            for candidate in items_to_group:
+                matches = [
+                    group for group in grouped
+                    if candidate.normalized_name == group[0].normalized_name
+                    or curriculum_name_similarity(candidate.name, group[0].name) >= 2 / 3
+                ]
+                if len(matches) == 1:
+                    matches[0].append(candidate)
+                else:
+                    grouped.append([candidate])
+            return grouped
+
         units = []
-        for unit in children.get(None, []):
+        for unit_group in unit_groups:
             topics = []
-            for topic in children.get(unit.id, []):
-                topic_data = serialize(topic)
-                topic_data["subtopics"] = [serialize(item) for item in children.get(topic.id, [])]
+            raw_topics = [topic for unit in unit_group for topic in children.get(unit.id, [])]
+            for topic_group in group_equivalent(raw_topics):
+                topic_data = serialize_many(topic_group)
+                raw_subtopics = [item for topic in topic_group for item in children.get(topic.id, [])]
+                topic_data["subtopics"] = [
+                    serialize_many(group) for group in group_equivalent(raw_subtopics)
+                ]
                 topics.append(topic_data)
             worked = sum(item["status"] != "not_studied" for item in topics)
             units.append({
-                **serialize(unit),
+                **serialize_many(unit_group),
                 "topics": topics,
                 "topic_count": len(topics),
                 "worked_topic_count": worked,
@@ -537,6 +771,7 @@ def curriculum_for_subject(subject_id: int, *, session_factory=SessionLocal) -> 
             },
             "units": units,
             "item_count": len(items),
+            "canonical_unit_count": len(units),
             "pending_document_count": int(pending_documents),
         }
 
@@ -546,9 +781,36 @@ def curriculum_scope(subject_id: int, item_id: int, *, session_factory=SessionLo
         item = session.get(CurriculumItem, item_id)
         if item is None or item.subject_id != subject_id or item.item_type not in {"topic", "subtopic"}:
             return {"ok": False, "error": "El tema curricular no está disponible"}
-        scope_ids = [item.id]
+        parent = session.get(CurriculumItem, item.parent_id) if item.parent_id else None
+        unit = parent if parent and parent.item_type == "unit" else session.get(CurriculumItem, parent.parent_id) if parent and parent.parent_id else None
+        root_units = list(session.scalars(select(CurriculumItem).where(
+            CurriculumItem.subject_id == subject_id,
+            CurriculumItem.item_type == "unit",
+            CurriculumItem.parent_id.is_(None),
+        )))
+        equivalent_unit_ids = {
+            candidate.id for candidate in root_units
+            if unit and (
+                candidate.normalized_name == unit.normalized_name
+                or units_are_strong_match(candidate.name, unit.name)
+            )
+        }
+        scope_items = [item]
+        if item.item_type == "topic" and equivalent_unit_ids:
+            scope_items = [
+                candidate for candidate in session.scalars(select(CurriculumItem).where(
+                    CurriculumItem.subject_id == subject_id,
+                    CurriculumItem.item_type == "topic",
+                    CurriculumItem.parent_id.in_(equivalent_unit_ids),
+                ))
+                if candidate.normalized_name == item.normalized_name
+                or curriculum_name_similarity(candidate.name, item.name) >= 2 / 3
+            ]
+        scope_ids = [candidate.id for candidate in scope_items]
         if item.item_type == "topic":
-            scope_ids.extend(session.scalars(select(CurriculumItem.id).where(CurriculumItem.parent_id == item.id)))
+            scope_ids.extend(session.scalars(select(CurriculumItem.id).where(
+                CurriculumItem.parent_id.in_(scope_ids)
+            )))
         chunk_ids = list(session.scalars(select(CurriculumChunkReference.chunk_id).where(
             CurriculumChunkReference.curriculum_item_id.in_(scope_ids)
         ).distinct()))

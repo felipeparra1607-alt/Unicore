@@ -24,21 +24,26 @@ from src.conversation_memory import (
 from src.database.connection import SessionLocal
 from src.database.models import Subject
 from src.database.migrate_conversations import migrate_conversations
+from src.database.migrate_material_classification import migrate_material_classification
 from src.database.migrate_v11 import migrate_v11
 from src.curriculum_engine import (
     backfill_pending_curriculum,
     curriculum_for_subject,
     curriculum_scope,
+    rebuild_subject_curriculum,
 )
 from src.decision_engine import build_decision_plan
 from src.document_library import (
     MAXIMUM_DOCUMENT_BYTES,
+    delete_managed_document,
     get_document_content,
     get_document_file,
     ingest_document_bytes,
     ingest_document_file,
+    list_subject_documents,
     prepare_document_safely,
     queue_document_processing,
+    update_document_classification,
 )
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
 from src.knowledge_map import build_subject_knowledge_map
@@ -486,7 +491,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "error": "Ruta de documentos inválida"}, 404)
                     return
                 subject_id = int(path_parts[2])
-                data = _build_documents(subject_id=subject_id)
+                data = list_subject_documents(subject_id)
                 self._send_json(data, 200 if data.get("ok") else 404)
                 return
 
@@ -963,12 +968,19 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     return
                 subject_id = int(path_parts[2])
                 file_name = str(query.get("file_name", [""])[0])
+                material_type = str(query.get("material_type", [""])[0])
+                if not material_type:
+                    self._send_json({"ok": False, "error": "Selecciona el tipo de material antes de subir"}, 400)
+                    return
+                unit_value = str(query.get("curriculum_unit_id", [""])[0]).strip()
                 temporary_path = self._receive_binary_upload()
                 result = ingest_document_file(
                     temporary_path=temporary_path,
                     file_name=file_name,
                     subject_id=subject_id,
                     document_type="course_material",
+                    material_type=material_type,
+                    curriculum_unit_id=int(unit_value) if unit_value else None,
                 )
                 if not result.get("duplicate"):
                     document_id = int(result["document"]["id"])
@@ -992,6 +1004,16 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     return
                 threading.Thread(target=prepare_document_safely, args=(document_id,), daemon=True).start()
                 self._send_json({"ok": True, "message": "UniCore está reintentando preparar el archivo.", "document": queued_document}, 202)
+                return
+
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/curriculum/rebuild"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 5:
+                    self._send_json({"ok": False, "error": "Ruta de reconstrucción inválida"}, 404)
+                    return
+                subject_id = int(path_parts[2])
+                result = rebuild_subject_curriculum(subject_id)
+                self._send_json(result, 200 if result.get("ok") else 400)
                 return
 
             if parsed.path == "/api/conversations":
@@ -1097,6 +1119,21 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 result = self._run_tool("update_academic_task", arguments)
                 self._send_json(result, 200 if result.get("ok") else 400)
                 return
+            if parsed.path.startswith("/api/documents/") and parsed.path.endswith("/classification"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 4:
+                    self._send_json({"ok": False, "error": "Ruta de material inválida"}, 404)
+                    return
+                document_id = int(path_parts[2])
+                payload = self._read_json()
+                unit_value = payload.get("curriculum_unit_id")
+                result = update_document_classification(
+                    document_id,
+                    material_type=str(payload.get("material_type", "")),
+                    curriculum_unit_id=int(unit_value) if unit_value is not None else None,
+                )
+                self._send_json(result, 200 if result.get("ok") else 400)
+                return
             self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
         except (ValueError, json.JSONDecodeError) as exc:
             self._send_json({"ok": False, "error": str(exc)}, 400)
@@ -1152,6 +1189,14 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     return
                 self._send_json({"ok": True})
                 return
+            if parsed.path.startswith("/api/documents/"):
+                document_id = int(parsed.path.removeprefix("/api/documents/").strip())
+                deleted = delete_managed_document(document_id)
+                if not deleted:
+                    self._send_json({"ok": False, "error": "El material no existe"}, 404)
+                    return
+                self._send_json({"ok": True, "document_id": document_id})
+                return
             self._send_json({"ok": False, "error": "Ruta no encontrada"}, 404)
         except Exception:
             self._send_json({"ok": False, "error": "No se pudo eliminar la conversación"}, 500)
@@ -1162,6 +1207,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     migrate_v11()
+    migrate_material_classification()
     migrate_conversations()
     backfill_pending_curriculum()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)

@@ -104,6 +104,12 @@ class Document(Base):
     )
     file_type: Mapped[str | None] = mapped_column(String(50))
     document_type: Mapped[str | None] = mapped_column(String(100))
+    material_type: Mapped[str] = mapped_column(
+        String(40), default="other", nullable=False, index=True
+    )
+    curriculum_unit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("curriculum_items.id", ondelete="SET NULL"), index=True
+    )
     academic_year: Mapped[str | None] = mapped_column(String(20))
     semester: Mapped[str | None] = mapped_column(String(40))
     professor_id: Mapped[int | None] = mapped_column(

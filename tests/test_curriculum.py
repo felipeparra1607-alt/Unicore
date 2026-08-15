@@ -51,6 +51,7 @@ class CurriculumEngineIsolatedTests(unittest.TestCase):
                 file_path=f"{title}-{subject_id}.md",
                 file_type="md",
                 document_type="course_material",
+                material_type="official_unit",
                 subject_id=subject_id,
                 extracted_text=text,
             )

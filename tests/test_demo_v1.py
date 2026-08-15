@@ -210,7 +210,7 @@ class DemoV1EndpointTests(unittest.TestCase):
         document_id = None
         try:
             status, uploaded = self._binary(
-                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-demo.txt",
+                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-demo.txt&material_type=other",
                 content,
             )
             self.assertEqual(status, 202)
@@ -227,7 +227,7 @@ class DemoV1EndpointTests(unittest.TestCase):
             self.assertIn(marker, opened["content"])
 
             status, duplicate = self._binary(
-                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-duplicate.txt",
+                f"/api/subjects/{self.subject_id}/materials?file_name=endpoint-duplicate.txt&material_type=other",
                 content,
             )
             self.assertEqual(status, 200)

@@ -5,26 +5,55 @@ import mimetypes
 import shutil
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from src.chunk_tools import generate_chunks_for_document
-from src.curriculum_engine import build_curriculum_for_document
+from src.curriculum_engine import build_curriculum_for_document, rebuild_document_curriculum
 from src.database.connection import DATA_DIR, SessionLocal
-from src.database.models import Document, DocumentChunk, Subject
+from src.database.models import (
+    ClassSession,
+    Conversation,
+    CurriculumChunkReference,
+    CurriculumDocumentReference,
+    CurriculumItem,
+    Document,
+    DocumentChunk,
+    ExplanationCache,
+    FlashcardDraft,
+    Subject,
+)
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
 from src.server import register_document_record
 
 
 MAXIMUM_DOCUMENT_BYTES = 50 * 1024 * 1024
 MANAGED_DOCUMENTS_DIR = DATA_DIR / "materials"
+MATERIAL_TYPES = {
+    "official_unit",
+    "class_notes",
+    "personal_summary",
+    "assignment",
+    "required_reading",
+    "supplementary",
+    "past_exam",
+    "rubric",
+    "other",
+}
 
 
-def _serialize_document(document: Document, chunk_count: int | None = None) -> dict:
+def _serialize_document(
+    document: Document,
+    chunk_count: int | None = None,
+    curriculum_unit_name: str | None = None,
+) -> dict:
     return {
         "id": document.id,
         "title": document.title,
         "file_type": document.file_type,
         "document_type": document.document_type,
+        "material_type": document.material_type or "other",
+        "curriculum_unit_id": document.curriculum_unit_id,
+        "curriculum_unit_name": curriculum_unit_name,
         "academic_year": document.academic_year,
         "semester": document.semester,
         "professor_id": document.professor_id,
@@ -37,6 +66,22 @@ def _serialize_document(document: Document, chunk_count: int | None = None) -> d
         "processing_error": document.processing_error,
         "created_at": document.created_at.isoformat() if document.created_at else None,
     }
+
+
+def _validate_material_type(material_type: str | None) -> str:
+    clean = str(material_type or "").strip().casefold()
+    if clean not in MATERIAL_TYPES:
+        raise ValueError("Selecciona un tipo de material válido")
+    return clean
+
+
+def _validated_unit(session, *, subject_id: int, unit_id: int | None) -> CurriculumItem | None:
+    if unit_id is None:
+        return None
+    unit = session.get(CurriculumItem, unit_id)
+    if unit is None or unit.subject_id != subject_id or unit.item_type != "unit":
+        raise ValueError("La unidad relacionada no pertenece a la asignatura")
+    return unit
 
 
 def _validate_upload(file_name: str, size_bytes: int) -> tuple[str, str]:
@@ -155,16 +200,20 @@ def ingest_document_file(
     academic_year: str | None = None,
     semester: str | None = None,
     professor_id: int | None = None,
+    material_type: str = "other",
+    curriculum_unit_id: int | None = None,
 ) -> dict:
     """Registra un upload binario ya escrito en disco, sin cargarlo en memoria."""
     final_path: Path | None = None
     try:
         size_bytes = temporary_path.stat().st_size if temporary_path.is_file() else 0
         clean_name, extension = _validate_upload(file_name, size_bytes)
+        clean_material_type = _validate_material_type(material_type)
         content_hash = _hash_file(temporary_path)
         with SessionLocal() as session:
             if session.get(Subject, subject_id) is None:
                 raise ValueError("La asignatura indicada no existe")
+            _validated_unit(session, subject_id=subject_id, unit_id=curriculum_unit_id)
             duplicate = session.scalar(select(Document).where(Document.content_hash == content_hash))
             if duplicate is not None:
                 if duplicate.subject_id != subject_id:
@@ -186,6 +235,8 @@ def ingest_document_file(
             document.academic_year = academic_year
             document.semester = semester
             document.professor_id = professor_id
+            document.material_type = clean_material_type
+            document.curriculum_unit_id = curriculum_unit_id
             document.processing_status = "processing"
             document.processing_stage = "Extrayendo contenido…"
             document.processing_error = None
@@ -206,6 +257,8 @@ def ingest_document_bytes(
     academic_year: str | None = None,
     semester: str | None = None,
     professor_id: int | None = None,
+    material_type: str = "other",
+    curriculum_unit_id: int | None = None,
 ) -> dict:
     """Persiste y prepara un material reutilizando el pipeline documental."""
 
@@ -221,6 +274,8 @@ def ingest_document_bytes(
         academic_year=academic_year,
         semester=semester,
         professor_id=professor_id,
+        material_type=material_type,
+        curriculum_unit_id=curriculum_unit_id,
     )
     if stored.get("duplicate"):
         return stored
@@ -240,10 +295,104 @@ def get_document_content(document_id: int) -> dict | None:
         chunk_count = session.scalar(
             select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == document_id)
         ) or 0
+        unit = session.get(CurriculumItem, document.curriculum_unit_id) if document.curriculum_unit_id else None
         return {
             "ok": True,
-            "document": _serialize_document(document, int(chunk_count)),
+            "document": _serialize_document(document, int(chunk_count), unit.name if unit else None),
             "content": document.extracted_text or "",
+    }
+
+
+def list_subject_documents(subject_id: int) -> dict:
+    with SessionLocal() as session:
+        subject = session.get(Subject, subject_id)
+        if subject is None:
+            return {"ok": False, "error": "La asignatura no existe"}
+        documents = list(session.scalars(select(Document).where(
+            Document.subject_id == subject_id
+        ).order_by(Document.created_at.desc())))
+        unit_ids = {document.curriculum_unit_id for document in documents if document.curriculum_unit_id}
+        unit_names = {
+            unit.id: unit.name for unit in session.scalars(select(CurriculumItem).where(
+                CurriculumItem.id.in_(unit_ids)
+            ))
+        } if unit_ids else {}
+        counts = dict(session.execute(select(
+            DocumentChunk.document_id, func.count(DocumentChunk.id)
+        ).where(
+            DocumentChunk.document_id.in_([document.id for document in documents])
+        ).group_by(DocumentChunk.document_id)).all()) if documents else {}
+        return {
+            "ok": True,
+            "subject": {"id": subject.id, "name": subject.name},
+            "count": len(documents),
+            "documents": [
+                _serialize_document(
+                    document,
+                    int(counts.get(document.id, 0)),
+                    unit_names.get(document.curriculum_unit_id),
+                )
+                for document in documents
+            ],
+        }
+
+
+def update_document_classification(
+    document_id: int,
+    *,
+    material_type: str,
+    curriculum_unit_id: int | None,
+) -> dict:
+    """Reclasifica relaciones sin tocar extracción, chunks ni embeddings."""
+
+    clean_material_type = _validate_material_type(material_type)
+    with SessionLocal() as session:
+        document = session.get(Document, document_id)
+        if document is None or document.subject_id is None:
+            return {"ok": False, "error": "El material no existe"}
+        unit = _validated_unit(
+            session, subject_id=document.subject_id, unit_id=curriculum_unit_id
+        )
+        before_item_ids = set(session.scalars(select(
+            CurriculumDocumentReference.curriculum_item_id
+        ).where(CurriculumDocumentReference.document_id == document_id)))
+        changed = (
+            (document.material_type or "other") != clean_material_type
+            or document.curriculum_unit_id != curriculum_unit_id
+        )
+        document.material_type = clean_material_type
+        document.curriculum_unit_id = curriculum_unit_id
+        session.commit()
+        if not changed:
+            return {
+                "ok": True,
+                "changed": False,
+                "embeddings_reused": True,
+                "document": _serialize_document(document, curriculum_unit_name=unit.name if unit else None),
+            }
+
+    rebuild = rebuild_document_curriculum(document_id, session_factory=SessionLocal)
+    with SessionLocal() as session:
+        document = session.get(Document, document_id)
+        after_item_ids = set(session.scalars(select(
+            CurriculumDocumentReference.curriculum_item_id
+        ).where(CurriculumDocumentReference.document_id == document_id)))
+        affected = before_item_ids ^ after_item_ids
+        if affected:
+            session.execute(delete(ExplanationCache).where(
+                ExplanationCache.curriculum_item_id.in_(affected)
+            ))
+        unit = session.get(CurriculumItem, document.curriculum_unit_id) if document.curriculum_unit_id else None
+        chunk_count = session.scalar(select(func.count(DocumentChunk.id)).where(
+            DocumentChunk.document_id == document_id
+        )) or 0
+        session.commit()
+        return {
+            "ok": bool(rebuild.get("ok")),
+            "changed": True,
+            "embeddings_reused": True,
+            "curriculum": rebuild,
+            "document": _serialize_document(document, int(chunk_count), unit.name if unit else None),
         }
 
 
@@ -270,6 +419,33 @@ def delete_managed_document(document_id: int) -> bool:
         path = Path(document.file_path).expanduser().resolve()
         if managed_root not in path.parents:
             raise ValueError("Solo pueden eliminarse materiales subidos desde UniCore")
+        chunk_ids = list(session.scalars(select(DocumentChunk.id).where(
+            DocumentChunk.document_id == document_id
+        )))
+        affected_item_ids = set(session.scalars(select(
+            CurriculumDocumentReference.curriculum_item_id
+        ).where(CurriculumDocumentReference.document_id == document_id)))
+        if chunk_ids:
+            session.execute(delete(CurriculumChunkReference).where(
+                CurriculumChunkReference.chunk_id.in_(chunk_ids)
+            ))
+        session.execute(delete(CurriculumDocumentReference).where(
+            CurriculumDocumentReference.document_id == document_id
+        ))
+        cache_filters = [ExplanationCache.document_id == document_id]
+        if affected_item_ids:
+            cache_filters.append(ExplanationCache.curriculum_item_id.in_(affected_item_ids))
+        from sqlalchemy import or_
+        session.execute(delete(ExplanationCache).where(or_(*cache_filters)))
+        session.execute(update(Conversation).where(
+            Conversation.document_id == document_id
+        ).values(document_id=None))
+        session.execute(update(ClassSession).where(
+            ClassSession.source_document_id == document_id
+        ).values(source_document_id=None))
+        session.execute(update(FlashcardDraft).where(
+            FlashcardDraft.document_id == document_id
+        ).values(document_id=None))
         session.delete(document)
         session.commit()
     path.unlink(missing_ok=True)

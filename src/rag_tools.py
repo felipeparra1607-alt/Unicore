@@ -32,6 +32,7 @@ def document_to_source_dict(document: Document) -> dict:
         "file_path": document.file_path,
         "file_type": document.file_type,
         "document_type": document.document_type,
+        "material_type": document.material_type or "other",
         "subject_id": document.subject_id,
     }
 
@@ -110,6 +111,7 @@ def retrieve_ranked_chunks(
     document_id: int | None = None,
     allowed_document_ids: list[int] | None = None,
     allowed_chunk_ids: list[int] | None = None,
+    ranking_context: str = "general",
 ) -> list[RankedChunk]:
     """Recupera y ordena todos los chunks compatibles."""
 
@@ -169,9 +171,33 @@ def retrieve_ranked_chunks(
                 chunk.content,
             )
 
-            combined_score = (
+            base_score = (
                 semantic_score * semantic_weight
                 + lexical_score * lexical_weight
+            )
+            material_type = document.material_type or "other"
+            context_bonuses = {
+                "study": {
+                    "official_unit": 0.08,
+                    "class_notes": 0.055,
+                    "required_reading": 0.025,
+                },
+                "task": {
+                    "assignment": 0.09,
+                    "rubric": 0.08,
+                    "official_unit": 0.045,
+                    "class_notes": 0.035,
+                },
+            }
+            effective_context = (
+                "study"
+                if ranking_context == "general"
+                and (allowed_document_ids is not None or allowed_chunk_ids is not None)
+                else ranking_context
+            )
+            combined_score = min(
+                1.0,
+                base_score + context_bonuses.get(effective_context, {}).get(material_type, 0.0),
             )
 
             ranked_chunks.append(
