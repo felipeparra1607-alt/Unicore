@@ -20,7 +20,7 @@ import AcademicMarkdown from "../components/AcademicMarkdown";
 import TokenUsageNote from "../components/TokenUsageNote";
 
 type Message = { role: "user" | "assistant"; text: string; sources?: AgentSource[]; usage?: TokenUsage; job?: boolean };
-type LaunchContext = { subjectId: number; subjectName: string; documentId?: number; documentTitle?: string } | null;
+type LaunchContext = { subjectId: number; subjectName: string; documentId?: number; documentTitle?: string; topic?: string; explanation?: string; sources?: unknown[] } | null;
 const ACTIVE_CONVERSATION_KEY = "unicore-active-conversation";
 const progress = ["Analizando la pregunta…", "Consultando solo el contexto necesario…", "Preparando una respuesta…"];
 const suggestions = ["¿Qué debería hacer ahora?", "Resume mi situación académica", "¿Dónde necesito más atención?"];
@@ -117,6 +117,7 @@ export default function AgentPage({ launchContext }: { launchContext?: LaunchCon
         subjectId,
         documentId,
         contextType: documentId != null ? "document" : subjectId != null ? "subject" : "general",
+        workContext: launchContext?.topic ? { topic: launchContext.topic, explanation: launchContext.explanation, sources: launchContext.sources } : undefined,
       });
       setConversationId(result.conversation_id);
       window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, result.conversation_id);

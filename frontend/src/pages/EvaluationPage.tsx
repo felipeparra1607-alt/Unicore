@@ -17,6 +17,7 @@ import {
   getLeitner,
   moveFlashcard,
   rateFlashcard,
+  rejectFlashcard,
   startFlashcards,
   type CurriculumData,
   type CurriculumSubtopic,
@@ -35,11 +36,7 @@ type EvaluationView = "select" | "flashcards" | "quiz";
 type FlashcardView = "practice" | "leitner";
 type AnswerMode = "mental" | "written" | "mixed";
 type CognitiveLevel =
-  | "recall"
-  | "understanding"
-  | "application"
-  | "analysis"
-  | "mixed";
+  "recall" | "understanding" | "application" | "analysis" | "mixed";
 type CurriculumTarget = CurriculumTopic | CurriculumSubtopic;
 
 const levelCopy: Record<CognitiveLevel, string> = {
@@ -55,7 +52,11 @@ const answerModeCopy: Record<AnswerMode, string> = {
   mixed: "Mixto",
 };
 
-export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubject: (subjectId: number) => void }) {
+export default function EvaluationPage({
+  onConfigureSubject,
+}: {
+  onConfigureSubject: (subjectId: number) => void;
+}) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [curriculum, setCurriculum] = useState<CurriculumData | null>(null);
   const [leitner, setLeitner] = useState<LeitnerData | null>(null);
@@ -75,6 +76,7 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
   const [drafts, setDrafts] = useState<FlashcardDraft[]>([]);
   const [draftIndex, setDraftIndex] = useState(0);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectingCard, setRejectingCard] = useState(false);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [cardIndex, setCardIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -294,6 +296,33 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
         caught instanceof Error
           ? caught.message
           : "No se pudo guardar la valoración.",
+      );
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function rejectCurrentCard() {
+    const card = cards[cardIndex];
+    if (!card || starting) return;
+    setStarting(true);
+    setError(null);
+    try {
+      await rejectFlashcard(card.id, rejectionReason || undefined);
+      setRejectingCard(false);
+      setRejectionReason("");
+      if (cardIndex === cards.length - 1) await finishSession();
+      else {
+        setCardIndex((value) => value + 1);
+        setRevealed(false);
+        setWrittenAnswer("");
+        setEvaluation(null);
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo rechazar la pregunta.",
       );
     } finally {
       setStarting(false);
@@ -616,6 +645,40 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
               </button>
             </div>
           ))}
+        {!writtenTurn && revealed && (
+          <div className="uc-flashcard-reject">
+            <button onClick={() => setRejectingCard((value) => !value)}>
+              Rechazar pregunta
+            </button>
+            {rejectingCard && (
+              <div>
+                <select
+                  value={rejectionReason}
+                  onChange={(event) => setRejectionReason(event.target.value)}
+                  aria-label="Motivo opcional de rechazo"
+                >
+                  <option value="">Motivo opcional</option>
+                  {[
+                    "Repetida",
+                    "Ya la domino",
+                    "No entra en evaluación",
+                    "Mala pregunta",
+                    "Irrelevante",
+                    "Otra",
+                  ].map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+                <button
+                  disabled={starting}
+                  onClick={() => void rejectCurrentCard()}
+                >
+                  Confirmar rechazo
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {error && <div className="uc-inline-error">{error}</div>}
       </div>
     );
@@ -671,7 +734,11 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
       {!languageReady && (
         <div className="uc-language-note">
           Idioma académico pendiente ·{" "}
-          <button onClick={() => subjectId != null && onConfigureSubject(subjectId)}>Configurar</button>
+          <button
+            onClick={() => subjectId != null && onConfigureSubject(subjectId)}
+          >
+            Configurar
+          </button>
         </div>
       )}
       {view === "select" ? (
@@ -733,98 +800,109 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
                 </button>
               </nav>
               {flashcardView === "practice" ? (
-                <div className="uc-evaluation-sequence"><p className="uc-evaluation-step"><span>01</span> Elige el alcance del temario</p>
-                <EvaluationConfig
-                  units={units}
-                  unitId={unitId}
-                  topicId={topicId}
-                  subtopicId={subtopicId}
-                  onUnit={(id) => {
-                    const unit = units.find((item) => item.id === id);
-                    setUnitId(id);
-                    setTopicId(unit?.topics[0]?.id ?? null);
-                    setSubtopicId(null);
-                  }}
-                  onTopic={(id) => {
-                    setTopicId(id);
-                    setSubtopicId(null);
-                  }}
-                  onSubtopic={setSubtopicId}
-                >
-                  <p className="uc-evaluation-step"><span>02</span> Ajusta cómo quieres practicar</p>
-                  <div className="uc-flashcard-config">
-                    <label>
-                      <span>Nivel</span>
-                      <select
-                        value={level}
-                        onChange={(event) =>
-                          setLevel(event.target.value as CognitiveLevel)
-                        }
-                      >
-                        {Object.entries(levelCopy).map(([key, label]) => (
-                          <option key={key} value={key}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Modo</span>
-                      <select
-                        value={answerMode}
-                        onChange={(event) =>
-                          setAnswerMode(event.target.value as AnswerMode)
-                        }
-                      >
-                        {Object.entries(answerModeCopy).map(([key, label]) => (
-                          <option key={key} value={key}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Tarjetas</span>
-                      <select
-                        value={cardCount}
-                        onChange={(event) =>
-                          setCardCount(Number(event.target.value))
-                        }
-                      >
-                        {[5, 6, 7, 8, 9, 10].map((value) => (
-                          <option key={value}>{value}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Duración</span>
-                      <select
-                        value={duration}
-                        onChange={(event) =>
-                          setDuration(Number(event.target.value))
-                        }
-                      >
-                        {[15, 30, 45, 60, 90].map((value) => (
-                          <option key={value}>{value} min</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <p className="uc-mixed-note">
-                    Mixed: 10% recall · 20% understanding · 35% application ·
-                    35% analysis.{" "}
-                    {languageReady
-                      ? `Generación en ${academicLanguageLabel}.`
-                      : "Configura el idioma académico para generar."}
+                <div className="uc-evaluation-sequence">
+                  <p className="uc-evaluation-step">
+                    <span>01</span> Elige el alcance del temario
                   </p>
-                  <button
-                    className="uc-primary-action"
-                    disabled={starting || !target}
-                    onClick={() => languageReady ? void beginFlashcards() : subjectId != null && onConfigureSubject(subjectId)}
+                  <EvaluationConfig
+                    units={units}
+                    unitId={unitId}
+                    topicId={topicId}
+                    subtopicId={subtopicId}
+                    onUnit={(id) => {
+                      const unit = units.find((item) => item.id === id);
+                      setUnitId(id);
+                      setTopicId(unit?.topics[0]?.id ?? null);
+                      setSubtopicId(null);
+                    }}
+                    onTopic={(id) => {
+                      setTopicId(id);
+                      setSubtopicId(null);
+                    }}
+                    onSubtopic={setSubtopicId}
                   >
-                    {starting ? "Generando lote…" : "Crear flashcards"}
-                  </button>
-                </EvaluationConfig>
+                    <p className="uc-evaluation-step">
+                      <span>02</span> Ajusta cómo quieres practicar
+                    </p>
+                    <div className="uc-flashcard-config">
+                      <label>
+                        <span>Nivel</span>
+                        <select
+                          value={level}
+                          onChange={(event) =>
+                            setLevel(event.target.value as CognitiveLevel)
+                          }
+                        >
+                          {Object.entries(levelCopy).map(([key, label]) => (
+                            <option key={key} value={key}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Modo</span>
+                        <select
+                          value={answerMode}
+                          onChange={(event) =>
+                            setAnswerMode(event.target.value as AnswerMode)
+                          }
+                        >
+                          {Object.entries(answerModeCopy).map(
+                            ([key, label]) => (
+                              <option key={key} value={key}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Tarjetas</span>
+                        <select
+                          value={cardCount}
+                          onChange={(event) =>
+                            setCardCount(Number(event.target.value))
+                          }
+                        >
+                          {[5, 6, 7, 8, 9, 10].map((value) => (
+                            <option key={value}>{value}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Duración</span>
+                        <select
+                          value={duration}
+                          onChange={(event) =>
+                            setDuration(Number(event.target.value))
+                          }
+                        >
+                          {[15, 30, 45, 60, 90].map((value) => (
+                            <option key={value}>{value} min</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <p className="uc-mixed-note">
+                      Mixed: 10% recall · 20% understanding · 35% application ·
+                      35% analysis.{" "}
+                      {languageReady
+                        ? `Generación en ${academicLanguageLabel}.`
+                        : "Configura el idioma académico para generar."}
+                    </p>
+                    <button
+                      className="uc-primary-action"
+                      disabled={starting || !target}
+                      onClick={() =>
+                        languageReady
+                          ? void beginFlashcards()
+                          : subjectId != null && onConfigureSubject(subjectId)
+                      }
+                    >
+                      {starting ? "Generando lote…" : "Crear flashcards"}
+                    </button>
+                  </EvaluationConfig>
                 </div>
               ) : (
                 <LeitnerView
@@ -864,7 +942,9 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
                 }}
                 onSubtopic={setSubtopicId}
               >
-                <p className="uc-evaluation-step"><span>02</span> Ajusta el formato futuro</p>
+                <p className="uc-evaluation-step">
+                  <span>02</span> Ajusta el formato futuro
+                </p>
                 <div className="uc-quiz-options">
                   <label>
                     <span>Nivel</span>

@@ -11,8 +11,31 @@ test("la UI principal no presenta gamificación", async () => {
 
 test("Work Mode filtra documentos relacionados y no inicia IA automáticamente", async () => {
   const work = await source("pages/WorkSessionPage.tsx");
-  assert.match(work, /filter\(\(document\)\s*=>\s*ids\.includes\(document\.id\),?\s*\)/);
+  assert.match(work, /relatedDocumentIds\.includes\(document\.id\)/);
   assert.match(work, /Pregunta a UniCore cuando necesites ayuda con este bloque/);
   assert.match(work, /<AcademicMarkdown/);
   assert.equal(/useEffect\([^]*sendAgentMessage/.test(work.slice(0, work.indexOf("async function askAgent"))), false);
+  assert.match(work, /getCurriculum/);
+  assert.match(work, /Temas para repasar/);
+});
+
+test("Home no duplica el planner y Goals no presenta preparación", async () => {
+  const dashboard = await source("components/Dashboard.tsx");
+  const goals = await source("pages/GoalsPage.tsx");
+  assert.doesNotMatch(dashboard, /getDecisionPlan|Cómo reparto|Empezar bloque/);
+  assert.match(dashboard, /Tareas pendientes/);
+  assert.doesNotMatch(goals, /preparación|readiness/i);
+  assert.match(goals, /weeklyMinutesFor/);
+});
+
+test("Planner permite quitar solo del plan actual y Flashcards mantiene modos", async () => {
+  const tasks = await source("pages/TasksPage.tsx");
+  const cards = await source("pages/EvaluationPage.tsx");
+  assert.match(tasks, /removeFromCurrentSession/);
+  assert.match(tasks, /Quitar .* de esta sesión/);
+  assert.match(cards, /No la sabía/);
+  assert.match(cards, /La sabía/);
+  assert.match(cards, /La dominaba/);
+  assert.match(cards, /Rechazar pregunta/);
+  assert.match(cards, /answerMode === "mixed" && cardIndex % 2 === 1/);
 });

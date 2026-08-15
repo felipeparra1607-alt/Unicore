@@ -18,9 +18,17 @@ import ProfessorsPage from "./pages/ProfessorsPage";
 import TranscriptsPage from "./pages/TranscriptsPage";
 import UpcomingPage from "./pages/UpcomingPage";
 import type { DecisionAction, SubjectDocumentsData } from "./api";
-import { normalizeStoredWorkSession, WORK_SESSION_STORAGE_KEY, type LegacyWorkSession, type StoredWorkSession } from "./workSession";
+import {
+  normalizeStoredWorkSession,
+  WORK_SESSION_STORAGE_KEY,
+  type LegacyWorkSession,
+  type StoredWorkSession,
+} from "./workSession";
 
-const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
+const sectionCopy: Record<
+  Exclude<SectionId, "dashboard">,
+  { eyebrow: string; title: string; body: string }
+> = {
   subjects: {
     eyebrow: "Asignaturas",
     title: "Centro académico por asignatura",
@@ -85,23 +93,46 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
 
 export default function App() {
   const [section, setSection] = React.useState<SectionId>("dashboard");
-  const [selectedSubjectId, setSelectedSubjectId] = React.useState<number | null>(null);
-  const [pendingWorkAction, setPendingWorkAction] = React.useState<DecisionAction | null>(null);
-  const [agentLaunchContext, setAgentLaunchContext] = React.useState<{ subjectId: number; subjectName: string; documentId?: number; documentTitle?: string } | null>(null);
-  const [studyLaunchContext, setStudyLaunchContext] = React.useState<{ subjectId: number; subjectName: string; documentId?: number; topic?: string } | null>(null);
-  const [workSession, setWorkSession] = React.useState<StoredWorkSession | null>(() => {
-    try {
-      const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
-      return stored ? normalizeStoredWorkSession(JSON.parse(stored) as StoredWorkSession | LegacyWorkSession) : null;
-    } catch {
-      window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
-      return null;
-    }
-  });
+  const [selectedSubjectId, setSelectedSubjectId] = React.useState<
+    number | null
+  >(null);
+  const [pendingWorkAction, setPendingWorkAction] =
+    React.useState<DecisionAction | null>(null);
+  const [agentLaunchContext, setAgentLaunchContext] = React.useState<{
+    subjectId: number;
+    subjectName: string;
+    documentId?: number;
+    documentTitle?: string;
+    topic?: string;
+    explanation?: string;
+    sources?: unknown[];
+  } | null>(null);
+  const [studyLaunchContext, setStudyLaunchContext] = React.useState<{
+    subjectId: number;
+    subjectName: string;
+    documentId?: number;
+    topic?: string;
+  } | null>(null);
+  const [workSession, setWorkSession] =
+    React.useState<StoredWorkSession | null>(() => {
+      try {
+        const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
+        return stored
+          ? normalizeStoredWorkSession(
+              JSON.parse(stored) as StoredWorkSession | LegacyWorkSession,
+            )
+          : null;
+      } catch {
+        window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
+        return null;
+      }
+    });
 
   const selectSection = (nextSection: SectionId) => {
     if (workSession) {
-      const leave = window.confirm("Hay un bloque activo. Si cambias de sección se cerrará sin registrar. ¿Quieres salir del modo foco?");
+      const leave = window.confirm(
+        "Hay un bloque activo. Si cambias de sección se cerrará sin registrar. ¿Quieres salir del modo foco?",
+      );
       if (!leave) return;
       window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
       setWorkSession(null);
@@ -114,7 +145,9 @@ export default function App() {
 
   const handleSearchNavigate = (destination: SearchDestination) => {
     if (workSession) {
-      window.alert("Hay un bloque de trabajo activo. Finalízalo antes de abrir otro resultado.");
+      window.alert(
+        "Hay un bloque de trabajo activo. Finalízalo antes de abrir otro resultado.",
+      );
       return;
     }
     if (destination.kind === "subject") {
@@ -126,10 +159,16 @@ export default function App() {
     setSection(destination.kind === "task" ? "tasks" : "knowledge");
   };
 
-  const updateWorkSession = React.useCallback((nextSession: StoredWorkSession) => {
-    setWorkSession(nextSession);
-    window.localStorage.setItem(WORK_SESSION_STORAGE_KEY, JSON.stringify(nextSession));
-  }, []);
+  const updateWorkSession = React.useCallback(
+    (nextSession: StoredWorkSession) => {
+      setWorkSession(nextSession);
+      window.localStorage.setItem(
+        WORK_SESSION_STORAGE_KEY,
+        JSON.stringify(nextSession),
+      );
+    },
+    [],
+  );
 
   const startWorkSession = (durationMinutes: number) => {
     if (!pendingWorkAction) return;
@@ -137,10 +176,16 @@ export default function App() {
     setPendingWorkAction(null);
   };
 
-  const startWorkPlan = (actions: DecisionAction[], durationMinutes: number) => {
+  const startWorkPlan = (
+    actions: DecisionAction[],
+    durationMinutes: number,
+  ) => {
     if (!actions.length) return;
     const remainingMs = durationMinutes * 60_000;
-    const actionRemainingMs = Math.min(remainingMs, actions[0].allocated_minutes * 60_000);
+    const actionRemainingMs = Math.min(
+      remainingMs,
+      actions[0].allocated_minutes * 60_000,
+    );
     const nextSession: StoredWorkSession = {
       actions,
       durationMinutes,
@@ -161,29 +206,76 @@ export default function App() {
     setSection("dashboard");
   };
 
-  const openDocumentInAgent = (document: SubjectDocumentsData["documents"][number], subjectName: string) => {
-    setAgentLaunchContext({ subjectId: document.subject_id!, subjectName, documentId: document.id, documentTitle: document.title });
+  const openDocumentInAgent = (
+    document: SubjectDocumentsData["documents"][number],
+    subjectName: string,
+  ) => {
+    setAgentLaunchContext({
+      subjectId: document.subject_id!,
+      subjectName,
+      documentId: document.id,
+      documentTitle: document.title,
+    });
     setSection("agent");
   };
 
   return (
-    <Layout active={section} onSection={selectSection} onSearchNavigate={handleSearchNavigate} focusMode={Boolean(workSession)}>
+    <Layout
+      active={section}
+      onSection={selectSection}
+      onSearchNavigate={handleSearchNavigate}
+      focusMode={Boolean(workSession)}
+    >
       {workSession ? (
-        <WorkSessionPage session={workSession} onChange={updateWorkSession} onClose={closeWorkSession} />
+        <WorkSessionPage
+          session={workSession}
+          onChange={updateWorkSession}
+          onClose={closeWorkSession}
+        />
       ) : section === "dashboard" ? (
-        <Dashboard onRequestWorkBlock={setPendingWorkAction} onOpenSubjects={() => selectSection("subjects")} />
+        <Dashboard
+          onOpenSubjects={() => selectSection("subjects")}
+          onOpenTasks={() => selectSection("tasks")}
+        />
       ) : section === "subjects" ? (
         selectedSubjectId == null ? (
           <SubjectsPage onSelect={setSelectedSubjectId} />
         ) : (
-          <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} onOpenAgent={openDocumentInAgent} onStartStudy={(subjectName) => { setStudyLaunchContext({ subjectId: selectedSubjectId, subjectName }); setSection("study"); }} />
+          <SubjectDetailPage
+            subjectId={selectedSubjectId}
+            onBack={() => setSelectedSubjectId(null)}
+            onNavigate={selectSection}
+            onOpenAgent={openDocumentInAgent}
+            onStartStudy={(subjectName) => {
+              setStudyLaunchContext({
+                subjectId: selectedSubjectId,
+                subjectName,
+              });
+              setSection("study");
+            }}
+          />
         )
       ) : section === "tasks" ? (
         <TasksPage onStartWorkPlan={startWorkPlan} onNavigate={selectSection} />
       ) : section === "study" ? (
-        <StudyPage launchContext={studyLaunchContext} onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
+        <StudyPage
+          launchContext={studyLaunchContext}
+          onConfigureSubject={(subjectId) => {
+            setSelectedSubjectId(subjectId);
+            setSection("subjects");
+          }}
+          onAskAgent={(context) => {
+            setAgentLaunchContext(context);
+            setSection("agent");
+          }}
+        />
       ) : section === "evaluation" ? (
-        <EvaluationPage onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
+        <EvaluationPage
+          onConfigureSubject={(subjectId) => {
+            setSelectedSubjectId(subjectId);
+            setSection("subjects");
+          }}
+        />
       ) : section === "goals" ? (
         <GoalsPage />
       ) : section === "knowledge" ? (
@@ -202,14 +294,24 @@ export default function App() {
         <UpcomingPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
-          <p className="uc-eyebrow">{sectionCopy[section as keyof typeof sectionCopy].eyebrow}</p>
+          <p className="uc-eyebrow">
+            {sectionCopy[section as keyof typeof sectionCopy].eyebrow}
+          </p>
           <h1>{sectionCopy[section as keyof typeof sectionCopy].title}</h1>
           <p>{sectionCopy[section as keyof typeof sectionCopy].body}</p>
           <div className="uc-placeholder-rule" />
-          <span>Se construirá sobre el backend real en los siguientes bloques.</span>
+          <span>
+            Se construirá sobre el backend real en los siguientes bloques.
+          </span>
         </section>
       )}
-      {pendingWorkAction && <WorkBlockDialog action={pendingWorkAction} onClose={() => setPendingWorkAction(null)} onStart={startWorkSession} />}
+      {pendingWorkAction && (
+        <WorkBlockDialog
+          action={pendingWorkAction}
+          onClose={() => setPendingWorkAction(null)}
+          onStart={startWorkSession}
+        />
+      )}
     </Layout>
   );
 }

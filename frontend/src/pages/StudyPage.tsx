@@ -58,9 +58,17 @@ const shortDate = (value: string) =>
 export default function StudyPage({
   launchContext,
   onConfigureSubject,
+  onAskAgent,
 }: {
   launchContext?: StudyLaunchContext;
   onConfigureSubject: (subjectId: number) => void;
+  onAskAgent: (context: {
+    subjectId: number;
+    subjectName: string;
+    topic: string;
+    explanation: string;
+    sources: AgentSource[];
+  }) => void;
 }) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [study, setStudy] = useState<StudyData | null>(null);
@@ -287,7 +295,28 @@ export default function StudyPage({
                 usage={active.usage}
                 sources={active.sources.length}
               />
-              <p className="uc-cache-note">{active.cacheHit ? "Reutilizada desde la explicación guardada · 0 tokens" : "Explicación guardada para reutilizarla mientras el material no cambie."}</p>
+              <p className="uc-cache-note">
+                {active.cacheHit
+                  ? "Reutilizada desde la explicación guardada · 0 tokens"
+                  : "Explicación guardada para reutilizarla mientras el material no cambie."}
+              </p>
+              <div className="uc-explanation-agent">
+                <strong>¿Tienes alguna duda?</strong>
+                <button
+                  onClick={() =>
+                    subjectId != null &&
+                    onAskAgent({
+                      subjectId,
+                      subjectName: curriculum?.subject.name ?? "Asignatura",
+                      topic: active.item.name,
+                      explanation: active.content,
+                      sources: active.sources,
+                    })
+                  }
+                >
+                  ✦ Preguntar a UniCore sobre este tema
+                </button>
+              </div>
             </article>
           </section>
           <aside className="uc-study-sources">
@@ -345,7 +374,11 @@ export default function StudyPage({
       {!languageReady && (
         <div className="uc-language-note">
           Idioma académico pendiente ·{" "}
-          <button onClick={() => subjectId != null && onConfigureSubject(subjectId)}>Configurar</button>
+          <button
+            onClick={() => subjectId != null && onConfigureSubject(subjectId)}
+          >
+            Configurar
+          </button>
         </div>
       )}
       {curriculum?.pending_document_count ? (
@@ -521,7 +554,18 @@ export default function StudyPage({
                   </select>
                 </label>
                 <div className="uc-study-actions">
-                  <button className="uc-primary-action" disabled={starting || !selected.sources.length} onClick={() => languageReady ? void beginExplanation() : subjectId != null && onConfigureSubject(subjectId)}><BookOpen size={15} /> {starting ? "Preparando…" : "Ver explicación"}</button>
+                  <button
+                    className="uc-primary-action"
+                    disabled={starting || !selected.sources.length}
+                    onClick={() =>
+                      languageReady
+                        ? void beginExplanation()
+                        : subjectId != null && onConfigureSubject(subjectId)
+                    }
+                  >
+                    <BookOpen size={15} />{" "}
+                    {starting ? "Preparando…" : "Ver explicación"}
+                  </button>
                 </div>
               </>
             ) : (

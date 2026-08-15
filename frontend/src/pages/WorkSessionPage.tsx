@@ -16,6 +16,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import AcademicMarkdown from "../components/AcademicMarkdown";
 import {
   createStudySession,
+  getCurriculum,
   getConversation,
   getDocumentContent,
   getDocumentFileUrl,
@@ -26,6 +27,8 @@ import {
   type AcademicTask,
   type AgentSource,
   type DocumentContent,
+  type CurriculumData,
+  type CurriculumTopic,
   type ProfessorData,
   type SubjectDocumentsData,
 } from "../api";
@@ -43,6 +46,7 @@ type ContextState = {
   professor: ProfessorData | null;
   documents: SubjectDocumentsData | null;
   task: AcademicTask | null;
+  curriculum: CurriculumData | null;
 };
 const progressMessages = [
   "Revisando el contexto…",
@@ -90,7 +94,9 @@ export default function WorkSessionPage({
     professor: null,
     documents: null,
     task: null,
+    curriculum: null,
   });
+  const [activeTopicId, setActiveTopicId] = useState<number | null>(null);
   const [contextLoading, setContextLoading] = useState(
     Boolean(action?.subject_id),
   );
@@ -148,7 +154,12 @@ export default function WorkSessionPage({
 
   useEffect(() => {
     if (!action || action.subject_id == null) {
-      setContext({ professor: null, documents: null, task: null });
+      setContext({
+        professor: null,
+        documents: null,
+        task: null,
+        curriculum: null,
+      });
       setContextLoading(false);
       return;
     }
@@ -159,7 +170,8 @@ export default function WorkSessionPage({
       getSubjectProfessor(action.subject_id),
       getSubjectDocuments(action.subject_id),
       getTasks(action.subject_id),
-    ]).then(([professor, documents, tasks]) => {
+      getCurriculum(action.subject_id),
+    ]).then(([professor, documents, tasks, curriculum]) => {
       if (!alive) return;
       setContext({
         professor: professor.status === "fulfilled" ? professor.value : null,
@@ -170,6 +182,7 @@ export default function WorkSessionPage({
                 ({ task }) => task.id === action.source_id,
               )?.task ?? null)
             : null,
+        curriculum: curriculum.status === "fulfilled" ? curriculum.value : null,
       });
       setContextLoading(false);
     });
@@ -438,10 +451,56 @@ export default function WorkSessionPage({
 
   const professorItems = context.professor?.preferences ?? [];
   const rubricItems = context.professor?.rubric_criteria ?? [];
-  const ids = metadataIds(action.metadata.document_ids);
-  const documents = (context.documents?.documents ?? []).filter((document) =>
-    ids.includes(document.id),
+  const normalizedTitle = action.title.toLocaleLowerCase();
+  const unitId =
+    typeof action.metadata.unit_id === "number"
+      ? action.metadata.unit_id
+      : null;
+  const activeUnit =
+    context.curriculum?.units.find((unit) => unit.id === unitId) ??
+    context.curriculum?.units.find((unit) =>
+      normalizedTitle.includes(unit.name.toLocaleLowerCase()),
+    ) ??
+    null;
+  const curriculumTopics = activeUnit?.topics ?? [];
+  const hasStudyHistory = curriculumTopics.some(
+    (topic) => topic.status !== "not_studied",
   );
+  const statusOrder: Record<CurriculumTopic["status"], number> = {
+    learning: 0,
+    consolidating: 1,
+    not_studied: 2,
+    mastered: 3,
+  };
+  const topics = hasStudyHistory
+    ? [...curriculumTopics].sort(
+        (left, right) =>
+          statusOrder[left.status] - statusOrder[right.status],
+      )
+    : curriculumTopics;
+  const activeTopic: CurriculumTopic | null =
+    topics.find((topic) => topic.id === activeTopicId) ?? null;
+  const ids = metadataIds(action.metadata.document_ids);
+  const curriculumDocumentIds = [
+    ...new Set(
+      topics.flatMap((topic) =>
+        [
+          ...topic.sources,
+          ...topic.subtopics.flatMap((subtopic) => subtopic.sources),
+        ].map((source) => source.document_id),
+      ),
+    ),
+  ];
+  const relatedDocumentIds = ids.length ? ids : curriculumDocumentIds;
+  const documents = (context.documents?.documents ?? []).filter((document) =>
+    relatedDocumentIds.includes(document.id),
+  );
+  const topicStatus = {
+    not_studied: "No estudiado",
+    learning: "Necesita atención",
+    consolidating: "Consolidando",
+    mastered: "Dominado",
+  } as const;
   const dueDate =
     context.task?.due_date ??
     (typeof action.metadata.due_date === "string"
@@ -492,8 +551,11 @@ export default function WorkSessionPage({
               <Play size={15} /> Reanudar
             </button>
           )}
-          <button onClick={() => setDrawerOpen(true)}>
-            <MessageCircle size={15} /> Preguntar a UniCore
+          <button
+            className="uc-work-agent-cta"
+            onClick={() => setDrawerOpen(true)}
+          >
+            <MessageCircle size={15} /> ✦ Preguntar a UniCore
           </button>
           <button
             className="is-finish"
@@ -530,83 +592,172 @@ export default function WorkSessionPage({
             Leyendo el contexto académico…
           </p>
         ) : (
-          <div className="uc-work-context-ledger">
-            {(dueDate || progress != null || context.task?.description) && (
-              <section>
-                <h3>Requisitos y estado</h3>
-                {dueDate && (
+          <>
+            {activeUnit && (
+              <section className="uc-work-curriculum">
+                <header>
                   <div>
-                    <span>Fecha límite</span>
-                    <strong>
-                      {new Date(`${dueDate}T00:00:00`).toLocaleDateString(
-                        "es-ES",
-                        { day: "numeric", month: "long" },
-                      )}
-                    </strong>
+                    <p className="uc-eyebrow">{activeUnit.name}</p>
+                    <h2>Temas para repasar</h2>
                   </div>
-                )}
-                {progress != null && (
-                  <div>
-                    <span>Progreso</span>
-                    <strong>{progress}%</strong>
-                  </div>
-                )}
-                {context.task?.description && <p>{context.task.description}</p>}
-                {context.task?.notes && <p>{context.task.notes}</p>}
-              </section>
-            )}
-            {(professorItems.length > 0 || rubricItems.length > 0) && (
-              <section>
-                <h3>Criterios relevantes</h3>
+                  <span>{topics.length} temas</span>
+                </header>
                 <ol>
-                  {[...professorItems]
-                    .sort((a, b) => b.importance - a.importance)
-                    .slice(0, 4)
-                    .map((item) => (
-                      <li key={`p-${item.id}`}>
-                        <strong>{item.preference}</strong>
-                      </li>
-                    ))}
-                  {[...rubricItems].slice(0, 4).map((item) => (
-                    <li key={`r-${item.id}`}>
-                      <strong>{item.title}</strong>
-                      {item.description && <span>{item.description}</span>}
+                  {topics.map((topic, index) => (
+                    <li
+                      key={topic.id}
+                      className={activeTopicId === topic.id ? "is-active" : ""}
+                    >
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <div>
+                        <strong>{topic.name}</strong>
+                        <small>{topicStatus[topic.status]}</small>
+                      </div>
+                      <button onClick={() => setActiveTopicId(topic.id)}>
+                        Abrir tema
+                      </button>
                     </li>
                   ))}
                 </ol>
               </section>
             )}
-            {documents.length > 0 && (
-              <section className="uc-work-materials">
-                <h3>Material relacionado</h3>
-                {documents.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => void openDocument(item.id)}
-                    disabled={documentLoading}
-                  >
-                    <FileText size={15} />
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>
-                        {item.file_type?.toUpperCase() ?? "Documento"}
-                      </small>
-                    </span>
-                  </button>
-                ))}
+            {activeTopic && (
+              <section className="uc-work-topic-detail">
+                <header>
+                  <div>
+                    <p className="uc-eyebrow">Tema activo</p>
+                    <h2>{activeTopic.name}</h2>
+                  </div>
+                  <button onClick={() => setActiveTopicId(null)}>Cerrar</button>
+                </header>
+                <div className="uc-work-topic-grid">
+                  <div>
+                    <h3>Conceptos clave</h3>
+                    {activeTopic.subtopics.length ? (
+                      <ul>
+                        {activeTopic.subtopics.map((item) => (
+                          <li key={item.id}>{item.name}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p>No hay subtemas separados en el Curriculum.</p>
+                    )}
+                  </div>
+                  <div>
+                    <h3>Estado de dominio</h3>
+                    <strong>{topicStatus[activeTopic.status]}</strong>
+                    <p>
+                      Basado únicamente en evidencias académicas registradas.
+                    </p>
+                  </div>
+                </div>
+                {activeTopic.sources.length > 0 && (
+                  <div className="uc-work-topic-sources">
+                    <h3>Fuentes</h3>
+                    {activeTopic.sources.map((source) => (
+                      <button
+                        key={`${source.document_id}-${source.source_label}`}
+                        onClick={() => void openDocument(source.document_id)}
+                      >
+                        <FileText size={14} /> {source.title} ·{" "}
+                        {source.source_label ?? "material asociado"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {activeTopic.also_seen_in.length > 0 && (
+                  <div>
+                    <h3>Conexiones reales</h3>
+                    {activeTopic.also_seen_in.map((item) => (
+                      <p key={`${item.subject_id}-${item.concept_name}`}>
+                        {item.concept_name} · {item.subject_name}
+                      </p>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
-            {!context.task &&
-              professorItems.length === 0 &&
-              rubricItems.length === 0 &&
-              documents.length === 0 && (
-                <p className="uc-work-context-loading">
-                  No hay contexto adicional relacionado con esta acción. UniCore
-                  no mostrará materiales ni conexiones sin una relación HTTP
-                  verificable.
-                </p>
+            <div className="uc-work-context-ledger">
+              {(dueDate || progress != null || context.task?.description) && (
+                <section>
+                  <h3>Requisitos y estado</h3>
+                  {dueDate && (
+                    <div>
+                      <span>Fecha límite</span>
+                      <strong>
+                        {new Date(`${dueDate}T00:00:00`).toLocaleDateString(
+                          "es-ES",
+                          { day: "numeric", month: "long" },
+                        )}
+                      </strong>
+                    </div>
+                  )}
+                  {progress != null && (
+                    <div>
+                      <span>Progreso</span>
+                      <strong>{progress}%</strong>
+                    </div>
+                  )}
+                  {context.task?.description && (
+                    <p>{context.task.description}</p>
+                  )}
+                  {context.task?.notes && <p>{context.task.notes}</p>}
+                </section>
               )}
-          </div>
+              {(professorItems.length > 0 || rubricItems.length > 0) && (
+                <section>
+                  <h3>Criterios relevantes</h3>
+                  <ol>
+                    {[...professorItems]
+                      .sort((a, b) => b.importance - a.importance)
+                      .slice(0, 4)
+                      .map((item) => (
+                        <li key={`p-${item.id}`}>
+                          <strong>{item.preference}</strong>
+                        </li>
+                      ))}
+                    {[...rubricItems].slice(0, 4).map((item) => (
+                      <li key={`r-${item.id}`}>
+                        <strong>{item.title}</strong>
+                        {item.description && <span>{item.description}</span>}
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              )}
+              {documents.length > 0 && (
+                <section className="uc-work-materials">
+                  <h3>Material relacionado</h3>
+                  {documents.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => void openDocument(item.id)}
+                      disabled={documentLoading}
+                    >
+                      <FileText size={15} />
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>
+                          {item.file_type?.toUpperCase() ?? "Documento"}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                </section>
+              )}
+              {!context.task &&
+                !activeUnit &&
+                professorItems.length === 0 &&
+                rubricItems.length === 0 &&
+                documents.length === 0 && (
+                  <p className="uc-work-context-loading">
+                    No hay contexto adicional relacionado con esta acción.
+                    UniCore no mostrará materiales ni conexiones sin una
+                    relación HTTP verificable.
+                  </p>
+                )}
+            </div>
+          </>
         )}
         {activeDocument && (
           <section className="uc-work-document">
