@@ -12,7 +12,7 @@ test("la UI principal no presenta gamificación", async () => {
 test("Work Mode filtra documentos relacionados y no inicia IA automáticamente", async () => {
   const work = await source("pages/WorkSessionPage.tsx");
   assert.match(work, /filter\(\(document\) => ids\.includes\(document\.id\)\)/);
-  assert.match(work, /El Agent no se activa solo/);
+  assert.match(work, /Pregunta a UniCore cuando necesites ayuda con este bloque/);
   assert.match(work, /<AcademicMarkdown/);
   assert.equal(/useEffect\([^]*sendAgentMessage/.test(work.slice(0, work.indexOf("async function askAgent"))), false);
 });
