@@ -23,10 +23,17 @@ def backup_database(timestamp: datetime | None = None) -> Path:
 
     BACKUPS_DIRECTORY.mkdir(parents=True, exist_ok=True)
     suffix = (timestamp or datetime.now()).strftime("%Y%m%d-%H%M%S")
-    backup_path = BACKUPS_DIRECTORY / f"unicore-pre-real-use-{suffix}.db"
+    backup_path = BACKUPS_DIRECTORY / f"unicore-before-clean-retest-{suffix}.db"
 
     with sqlite3.connect(DATABASE_PATH) as source, sqlite3.connect(backup_path) as target:
         source.backup(target)
+
+    if not backup_path.is_file() or backup_path.stat().st_size == 0:
+        raise RuntimeError(f"El backup no se creó correctamente: {backup_path}")
+    with sqlite3.connect(backup_path) as backup:
+        integrity = backup.execute("PRAGMA integrity_check").fetchone()
+    if integrity != ("ok",):
+        raise RuntimeError(f"El backup no superó integrity_check: {integrity}")
 
     return backup_path
 
@@ -81,12 +88,26 @@ def reset_user_data() -> dict[str, Any]:
     deleted_files: list[str] = []
     missing_files: list[str] = []
     MATERIALS_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    for path in material_paths:
-        if path.exists() and path.is_file():
+    registered = {path.resolve() for path in material_paths}
+    for path in sorted(
+        MATERIALS_DIRECTORY.rglob("*"),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        if path.is_symlink() or path.is_file():
+            resolved = path.resolve()
             path.unlink()
             deleted_files.append(str(path))
-        else:
-            missing_files.append(str(path))
+            registered.discard(resolved)
+        elif path.is_dir():
+            path.rmdir()
+    missing_files.extend(str(path) for path in sorted(registered))
+
+    remaining_materials = list(MATERIALS_DIRECTORY.iterdir())
+    if remaining_materials:
+        raise RuntimeError(
+            f"La carpeta de materiales no quedó vacía: {remaining_materials}"
+        )
 
     after = database_counts()
     non_empty = {name: count for name, count in after.items() if count}
