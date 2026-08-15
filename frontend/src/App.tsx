@@ -16,8 +16,9 @@ import WorkSessionPage from "./pages/WorkSessionPage";
 import WorkBlockDialog from "./components/WorkBlockDialog";
 import ProfessorsPage from "./pages/ProfessorsPage";
 import TranscriptsPage from "./pages/TranscriptsPage";
+import UpcomingPage from "./pages/UpcomingPage";
 import type { DecisionAction, SubjectDocumentsData } from "./api";
-import { WORK_SESSION_STORAGE_KEY, type StoredWorkSession } from "./workSession";
+import { normalizeStoredWorkSession, WORK_SESSION_STORAGE_KEY, type LegacyWorkSession, type StoredWorkSession } from "./workSession";
 
 const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; title: string; body: string }> = {
   subjects: {
@@ -75,6 +76,11 @@ const sectionCopy: Record<Exclude<SectionId, "dashboard">, { eyebrow: string; ti
     title: "Preferencias de UniCore",
     body: "Configura el tema y las preferencias locales de tu espacio académico.",
   },
+  upcoming: {
+    eyebrow: "Hoja de ruta",
+    title: "Próximamente",
+    body: "Capacidades previstas para futuras versiones de UniCore.",
+  },
 };
 
 export default function App() {
@@ -86,7 +92,7 @@ export default function App() {
   const [workSession, setWorkSession] = React.useState<StoredWorkSession | null>(() => {
     try {
       const stored = window.localStorage.getItem(WORK_SESSION_STORAGE_KEY);
-      return stored ? JSON.parse(stored) as StoredWorkSession : null;
+      return stored ? normalizeStoredWorkSession(JSON.parse(stored) as StoredWorkSession | LegacyWorkSession) : null;
     } catch {
       window.localStorage.removeItem(WORK_SESSION_STORAGE_KEY);
       return null;
@@ -127,17 +133,26 @@ export default function App() {
 
   const startWorkSession = (durationMinutes: number) => {
     if (!pendingWorkAction) return;
+    startWorkPlan([pendingWorkAction], durationMinutes);
+    setPendingWorkAction(null);
+  };
+
+  const startWorkPlan = (actions: DecisionAction[], durationMinutes: number) => {
+    if (!actions.length) return;
     const remainingMs = durationMinutes * 60_000;
+    const actionRemainingMs = Math.min(remainingMs, actions[0].allocated_minutes * 60_000);
     const nextSession: StoredWorkSession = {
-      action: pendingWorkAction,
+      actions,
       durationMinutes,
       startedAt: new Date().toISOString(),
       deadline: Date.now() + remainingMs,
       remainingMs,
       running: true,
+      activeIndex: 0,
+      actionDeadline: Date.now() + actionRemainingMs,
+      actionRemainingMs,
     };
     updateWorkSession(nextSession);
-    setPendingWorkAction(null);
   };
 
   const closeWorkSession = () => {
@@ -164,11 +179,11 @@ export default function App() {
           <SubjectDetailPage subjectId={selectedSubjectId} onBack={() => setSelectedSubjectId(null)} onNavigate={selectSection} onOpenAgent={openDocumentInAgent} onStartStudy={(subjectName) => { setStudyLaunchContext({ subjectId: selectedSubjectId, subjectName }); setSection("study"); }} />
         )
       ) : section === "tasks" ? (
-        <TasksPage onRequestWorkBlock={setPendingWorkAction} onNavigate={selectSection} />
+        <TasksPage onStartWorkPlan={startWorkPlan} onNavigate={selectSection} />
       ) : section === "study" ? (
-        <StudyPage launchContext={studyLaunchContext} />
+        <StudyPage launchContext={studyLaunchContext} onStartWorkBlock={setPendingWorkAction} onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
       ) : section === "evaluation" ? (
-        <EvaluationPage />
+        <EvaluationPage onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
       ) : section === "goals" ? (
         <GoalsPage />
       ) : section === "knowledge" ? (
@@ -183,6 +198,8 @@ export default function App() {
         <JobsPage />
       ) : section === "settings" ? (
         <SettingsPage />
+      ) : section === "upcoming" ? (
+        <UpcomingPage />
       ) : (
         <section className="uc-page-shell uc-placeholder">
           <p className="uc-eyebrow">{sectionCopy[section as keyof typeof sectionCopy].eyebrow}</p>

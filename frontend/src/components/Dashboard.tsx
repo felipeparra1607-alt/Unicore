@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
-  BookOpenCheck,
   CalendarDays,
   Clock3,
-  Flame,
   RefreshCw,
   Target,
-  Trophy,
 } from "lucide-react";
 import {
   getAssessments,
@@ -157,7 +154,7 @@ export default function Dashboard({ onRequestWorkBlock, onOpenSubjects }: { onRe
         </button>
       </header>
 
-      <section className="uc-dashboard-grid uc-dashboard-grid-top">
+      <section className="uc-dashboard-grid uc-dashboard-grid-top uc-dashboard-priority-only">
         <article className="uc-priority-block">
           <div className="uc-priority-topline">
             <div>
@@ -184,19 +181,6 @@ export default function Dashboard({ onRequestWorkBlock, onOpenSubjects }: { onRe
           {topAction && <div className="uc-priority-progress"><div className="uc-priority-progress-meta"><span>Tiempo sugerido por el plan actual</span><strong>{topAction.allocated_minutes} min</strong></div></div>}
         </article>
 
-        <aside className="uc-level-block">
-          <div className="uc-level-kicker"><Trophy size={18} /> Progreso UniCore</div>
-          <div className="uc-level-number">{data.hero.level}</div>
-          <div className="uc-level-copy">
-            <span>Nivel académico</span>
-            <strong>{data.hero.total_xp} XP</strong>
-          </div>
-          <div className="uc-progress-track compact">
-            <div className="uc-progress-fill" style={{ width: `${data.hero.level_progress_percentage}%` }} />
-          </div>
-          <p>{data.hero.xp_until_next_level} XP para el nivel {data.hero.level + 1}</p>
-          <div className="uc-streak-inline"><Flame size={15} /><span>Racha actual</span><strong>{data.hero.current_streak} día(s)</strong></div>
-        </aside>
       </section>
 
       <section className="uc-kpis" aria-label="Indicadores académicos">
@@ -254,29 +238,7 @@ export default function Dashboard({ onRequestWorkBlock, onOpenSubjects }: { onRe
           </div>
         </Card>
 
-        <Card title="Misiones de hoy" className="uc-week-goals">
-          {data.missions.items.length === 0 ? (
-            <div className="uc-missions-empty">
-              <strong>No hay misiones para hoy.</strong>
-              <p>Cuando UniCore genere nuevos objetivos, aparecerán aquí junto con su progreso y recompensa de XP.</p>
-            </div>
-          ) : data.missions.items.slice(0, 3).map((mission) => {
-            const percentage = mission.target_value > 0
-              ? Math.min(100, (mission.current_value / mission.target_value) * 100)
-              : 0;
-            return (
-              <div key={mission.id}>
-                <div className="uc-goal-row">
-                  <div><BookOpenCheck size={16} /><span>{mission.title}</span></div>
-                  <strong>{mission.current_value} / {mission.target_value} · +{mission.reward_xp} XP</strong>
-                </div>
-                <div className="uc-progress-track subtle">
-                  <div className="uc-progress-fill" style={{ width: `${percentage}%` }} />
-                </div>
-              </div>
-            );
-          })}
-
+        <Card title="Actividad semanal" className="uc-week-goals">
           <div className="uc-activity-strip">
             <div><span>Actividad</span><strong>Últimos 7 días</strong></div>
             <div className="uc-heat-row">

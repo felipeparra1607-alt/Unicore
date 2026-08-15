@@ -1,18 +1,19 @@
-import { CalendarDays, Check, CheckCircle2, Clock3, FileText, Plus, RefreshCw, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarDays, Check, CheckCircle2, Clock3, FileText, Minus, Play, Plus, RefreshCw, SlidersHorizontal, Upload, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeTaskFile,
   createTask,
   getDashboard,
+  getCurriculum,
   getDecisionPlan,
   getTasks,
   updateTask,
   type DashboardData,
   type DecisionAction,
-  type DecisionPlan,
   type TasksData,
 } from "../api";
 import type { SectionId } from "../components/Layout";
+import { allocatedMinutes, changeActionMinutes, composePlan, movePlanAction, type PlannerMode } from "../utils/planner";
 
 const durations = [15, 30, 45, 60, 90];
 const taskTypes = [["assignment", "Entrega"], ["exam", "Examen"], ["reading", "Lectura"], ["project", "Proyecto"], ["presentation", "Presentación"], ["class_preparation", "Preparación de clase"], ["administrative", "Administrativa"], ["other", "Otra"]] as const;
@@ -29,11 +30,13 @@ function dueLabel(days: number | null) { if (days == null) return "Sin fecha"; i
 function priorityLabel(value: number) { if (value >= 5) return "Crítica"; if (value >= 4) return "Alta"; if (value >= 3) return "Media"; return "Baja"; }
 function decisionPriorityLabel(value: DecisionAction["priority"]) { return ({ critical: "Crítica", high: "Alta", medium: "Media", low: "Baja" } as const)[value]; }
 
-export default function TasksPage({ onRequestWorkBlock, onNavigate }: { onRequestWorkBlock: (action: DecisionAction) => void; onNavigate: (section: SectionId) => void }) {
+export default function TasksPage({ onStartWorkPlan, onNavigate }: { onStartWorkPlan: (actions: DecisionAction[], duration: number) => void; onNavigate: (section: SectionId) => void }) {
   const [data, setData] = useState<TasksData | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
-  const [plan, setPlan] = useState<DecisionPlan | null>(null);
   const [duration, setDuration] = useState(60);
+  const [plannerMode, setPlannerMode] = useState<PlannerMode>("priority");
+  const [planActions, setPlanActions] = useState<DecisionAction[]>([]);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [scope, setScope] = useState<Scope>("active");
   const [loading, setLoading] = useState(true);
   const [planning, setPlanning] = useState(false);
@@ -54,14 +57,16 @@ export default function TasksPage({ onRequestWorkBlock, onNavigate }: { onReques
     setLoading(true); setError(null);
     try {
       const [tasks, nextPlan, subjects] = await Promise.all([getTasks(), getDecisionPlan(duration, 5), getDashboard()]);
-      setData(tasks); setPlan(nextPlan); setDashboard(subjects);
+      const ids = [...new Set(nextPlan.actions.flatMap((action) => action.subject_id == null ? [] : [action.subject_id]))];
+      const curricula = (await Promise.allSettled(ids.map(getCurriculum))).flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      setData(tasks); setPlanActions(composePlan(nextPlan.actions, plannerMode, curricula)); setDashboard(subjects);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "No se pudieron cargar las tareas."); }
     finally { setLoading(false); }
   }
 
   async function changeDuration(minutes: number) {
     setDuration(minutes); setPlanning(true); setError(null);
-    try { setPlan(await getDecisionPlan(minutes, 5)); }
+    try { const next = await getDecisionPlan(minutes, 5); const ids = [...new Set(next.actions.flatMap((action) => action.subject_id == null ? [] : [action.subject_id]))]; const curricula = (await Promise.allSettled(ids.map(getCurriculum))).flatMap((result) => result.status === "fulfilled" ? [result.value] : []); setPlanActions(composePlan(next.actions, plannerMode, curricula)); setPlanError(null); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "No se pudo calcular el plan."); }
     finally { setPlanning(false); }
   }
@@ -141,7 +146,7 @@ export default function TasksPage({ onRequestWorkBlock, onNavigate }: { onReques
     {notice && <div className="uc-inline-success">{notice}</div>}{error && <div className="uc-inline-error">{error}</div>}
     <section className="uc-task-summary"><div><span>Vencidas</span><strong className={counts.overdue ? "is-danger" : ""}>{counts.overdue}</strong><small>requieren atención</small></div><div><span>Para hoy</span><strong>{counts.today}</strong><small>con fecha actual</small></div><div><span>En progreso</span><strong>{counts.inProgress}</strong><small>trabajo iniciado</small></div></section>
 
-    <section className="uc-planner-block"><div className="uc-planner-copy"><p className="uc-eyebrow">Plan de trabajo</p><h2>¿Cómo reparto este tiempo?</h2><p>Elige el tiempo disponible. UniCore mantiene el orden del Decision Engine y te muestra únicamente las razones académicas.</p><div className="uc-duration-control" aria-label="Duración disponible">{durations.map((minutes) => <button key={minutes} className={duration === minutes ? "is-active" : ""} onClick={() => void changeDuration(minutes)}>{minutes}<span>min</span></button>)}</div></div><div className="uc-planner-result">{planning ? <div className="uc-empty-inline">Calculando el plan…</div> : plan?.actions.length ? <>{plan.actions.map((action) => <article key={`${action.type}-${action.source_id}`}><div className="uc-plan-minutes"><strong>{action.allocated_minutes}</strong><span>min</span></div><div className="uc-plan-action-copy"><strong>{action.title}</strong><p>{action.reasons.join(" ")}</p><small>{action.subject_name ?? "UniCore"} · prioridad {decisionPriorityLabel(action.priority)}</small></div><div className="uc-plan-actions"><button onClick={() => navigateAction(action)}>Abrir</button><button className="is-start" onClick={() => onRequestWorkBlock(action)}>Empezar bloque</button></div></article>)}<footer><strong>{plan.allocated_minutes} de {plan.available_minutes} minutos asignados</strong><span>{plan.remaining_minutes > 0 ? `${plan.remaining_minutes} min quedan sin asignar.` : "Todo el tiempo disponible tiene una acción real."}</span></footer></> : <div className="uc-empty-inline">No hay acciones prioritarias para este bloque. No se ha inventado trabajo para rellenar el tiempo.</div>}</div></section>
+    <section className="uc-planner-block"><div className="uc-planner-copy"><p className="uc-eyebrow">Plan de trabajo</p><h2>Construye una sesión completa.</h2><p>Parte del Decision Engine, agrupa repeticiones y conserva únicamente acciones académicas reales.</p><div className="uc-duration-control" aria-label="Duración disponible">{durations.map((minutes) => <button key={minutes} className={duration === minutes ? "is-active" : ""} onClick={() => void changeDuration(minutes)}>{minutes}<span>min</span></button>)}</div><div className="uc-planner-mode"><button className={plannerMode === "priority" ? "is-active" : ""} onClick={() => { setPlannerMode("priority"); setPlanActions(composePlan(planActions, "priority")); }}>Prioridad</button><button className={plannerMode === "balanced" ? "is-active" : ""} onClick={() => { setPlannerMode("balanced"); setPlanActions(composePlan(planActions, "balanced")); }}>Equilibrado</button></div></div><div className="uc-planner-result">{planning ? <div className="uc-empty-inline">Calculando el plan…</div> : planActions.length ? <>{planActions.map((action, index) => <article key={`${action.type}-${action.subject_id}-${action.source_id}-${index}`}><div className="uc-plan-order"><button disabled={index === 0} onClick={() => setPlanActions(movePlanAction(planActions, index, -1))} aria-label="Subir actividad"><ArrowUp size={14} /></button><button disabled={index === planActions.length - 1} onClick={() => setPlanActions(movePlanAction(planActions, index, 1))} aria-label="Bajar actividad"><ArrowDown size={14} /></button></div><div className="uc-plan-minutes"><button onClick={() => { const result = changeActionMinutes(planActions, index, -15, duration); setPlanActions(result.actions); setPlanError(result.error); }} aria-label="Restar 15 minutos"><Minus size={13} /></button><strong>{action.allocated_minutes}</strong><span>min</span><button onClick={() => { const result = changeActionMinutes(planActions, index, 15, duration); setPlanActions(result.actions); setPlanError(result.error); }} aria-label="Añadir 15 minutos"><Plus size={13} /></button></div><div className="uc-plan-action-copy"><strong>{action.title}</strong><p>{action.reasons.join(" ")}</p><small>{action.subject_name ?? "UniCore"} · prioridad {decisionPriorityLabel(action.priority)}</small></div><div className="uc-plan-actions"><button onClick={() => navigateAction(action)}>Abrir</button></div></article>)}{planError && <div className="uc-inline-warning">{planError}</div>}<footer><div><strong>{allocatedMinutes(planActions)} de {duration} minutos asignados</strong><span>{Math.max(0, duration - allocatedMinutes(planActions))} min disponibles.</span></div><button className="uc-primary-action" onClick={() => onStartWorkPlan(planActions, duration)}><Play size={15} /> Iniciar bloque</button></footer></> : <div className="uc-empty-inline">No hay acciones prioritarias para este bloque. No se ha inventado trabajo para rellenar el tiempo.</div>}</div></section>
 
     <section className="uc-task-register"><div className="uc-task-register-head"><div><p className="uc-eyebrow">Registro activo</p><h2>Trabajo pendiente</h2></div><div className="uc-task-filters"><SlidersHorizontal size={14} />{([['active','Todas'],['overdue','Vencidas'],['today','Hoy'],['upcoming','Próximas'],['undated','Sin fecha']] as const).map(([value, label]) => <button key={value} className={scope === value ? "is-active" : ""} onClick={() => setScope(value)}>{label}</button>)}</div></div>{tasks.length === 0 ? <div className="uc-task-empty"><strong>No hay tareas en esta vista.</strong><span>{data?.count ? "Prueba otro filtro para revisar tu trabajo activo." : "Añade una tarea para empezar a planificar."}</span></div> : <div className="uc-task-list">{tasks.map(({ task }) => <article className={`uc-task-row ${task.is_overdue ? "is-overdue" : ""}`} key={task.id}><div className="uc-task-priority"><span>Prioridad</span><strong>{priorityLabel(task.priority)}</strong></div><div className="uc-task-main"><div><strong>{task.title}</strong><span>{task.subject_name ?? "Sin asignatura"} · {task.task_type}</span></div>{task.description && <p>{task.description}</p>}<div className="uc-task-progress"><div className="uc-progress-track"><div className="uc-progress-fill" style={{ width: `${task.progress_percentage}%` }} /></div><span>{task.progress_percentage}%</span></div></div><div className="uc-task-meta"><span className={task.is_overdue ? "is-danger" : ""}><CalendarDays size={14} />{dueLabel(task.days_until_due)}</span><span><Clock3 size={14} />{task.remaining_minutes != null ? `${task.remaining_minutes} min restantes` : "Sin estimación"}</span><button className="uc-complete-task" onClick={() => void complete(task.id)}><Check size={13} /> Marcar completada</button></div></article>)}</div>}</section>
 

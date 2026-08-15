@@ -12,12 +12,12 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Telescope,
   Sun,
   X,
   UsersRound,
 } from "lucide-react";
 import React from "react";
-import { getDashboard, type DashboardData } from "../api";
 import GlobalSearch, { type SearchDestination } from "./GlobalSearch";
 
 const sections = [
@@ -31,6 +31,7 @@ const sections = [
   { id: "professors", label: "Profesores", icon: UsersRound },
   { id: "transcripts", label: "Transcripciones", icon: AudioLines },
   { id: "agent", label: "Agent", icon: BrainCircuit },
+  { id: "upcoming", label: "Próximamente", icon: Telescope },
 ] as const;
 
 export type SectionId = (typeof sections)[number]["id"] | "jobs" | "settings";
@@ -61,7 +62,6 @@ export default function Layout({
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [theme, setTheme] = React.useState<ThemePreference>(getInitialTheme);
   const [resolvedTheme, setResolvedTheme] = React.useState<Theme>("light");
-  const [profile, setProfile] = React.useState<DashboardData["hero"] | null>(null);
 
   React.useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -85,8 +85,6 @@ export default function Layout({
     window.addEventListener("unicore-preferences-changed", applyPreferences);
     return () => window.removeEventListener("unicore-preferences-changed", applyPreferences);
   }, []);
-
-  React.useEffect(() => { getDashboard().then((data) => setProfile(data.hero)).catch(() => setProfile(null)); }, []);
 
   const selectSection = (section: SectionId) => {
     onSection(section);
@@ -130,16 +128,6 @@ export default function Layout({
         </nav>
 
         <div className="uc-sidebar-foot">
-          <div className="uc-mini-level">
-            <div className="uc-mini-level-row">
-              <span>{profile ? `Nivel ${profile.level}` : "Nivel —"}</span>
-              <strong>{profile ? `${profile.total_xp} XP` : "— XP"}</strong>
-            </div>
-            <div className="uc-progress-track compact">
-              <div className="uc-progress-fill" style={{ width: `${profile?.level_progress_percentage ?? 0}%` }} />
-            </div>
-            <small>{profile ? `${profile.xp_until_next_level} XP para el siguiente nivel` : "Progreso no disponible"}</small>
-          </div>
           <button className="uc-agent-shortcut" onClick={() => selectSection("agent")}>
             <Sparkles size={16} />
             Preguntar a UniCore
