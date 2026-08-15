@@ -118,6 +118,11 @@ class Document(Base):
     )
     extracted_text: Mapped[str | None] = mapped_column(Text)
     curriculum_processed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    processing_status: Mapped[str] = mapped_column(
+        String(30), default="ready", nullable=False
+    )
+    processing_stage: Mapped[str | None] = mapped_column(String(100))
+    processing_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -1350,6 +1355,22 @@ class FlashcardDraft(Base):
     rejection_reason: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ExplanationCache(Base):
+    __tablename__ = "explanation_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
+    document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"), index=True)
+    curriculum_item_id: Mapped[int | None] = mapped_column(index=True)
+    topic_key: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    difficulty: Mapped[str] = mapped_column(String(50), nullable=False)
+    material_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class TokenUsage(Base):

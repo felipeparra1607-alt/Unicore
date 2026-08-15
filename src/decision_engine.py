@@ -613,6 +613,26 @@ def fit_recommendations_to_time(
     return selected
 
 
+def ensure_academic_task_candidate(selected: list[dict], recommendations: list[dict], available_minutes: int, maximum_actions: int) -> list[dict]:
+    """Reserva una candidata de tarea real cuando hay trabajo pendiente.
+
+    El ranking puro podía llenar el máximo de acciones con repasos y dejar fuera
+    una AcademicTask activa aunque fuera ejecutable en el bloque.
+    """
+    if any(item["type"] == "task" for item in selected):
+        return selected
+    task = next((item for item in recommendations if item["type"] == "task"), None)
+    if task is None or available_minutes < 10:
+        return selected
+    candidate = {**task, "allocated_minutes": int(min(task["suggested_minutes"], available_minutes))}
+    if not selected:
+        return [candidate]
+    replacement_index = min(range(len(selected)), key=lambda index: selected[index]["score"])
+    updated = [*selected]
+    updated[replacement_index] = candidate
+    return updated[:maximum_actions]
+
+
 def build_decision_plan(
     available_minutes: int = 45,
     subject_id: int | None = None,
@@ -846,6 +866,9 @@ def build_decision_plan(
                 available_minutes,
                 maximum_actions,
             )
+        )
+        selected = ensure_academic_task_candidate(
+            selected, recommendations, available_minutes, maximum_actions
         )
 
         allocated_minutes = sum(

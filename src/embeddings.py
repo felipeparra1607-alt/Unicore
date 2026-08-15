@@ -22,21 +22,24 @@ def get_embedding_model() -> SentenceTransformer:
     return SentenceTransformer(DEFAULT_EMBEDDING_MODEL)
 
 
-def create_embeddings(texts: list[str]) -> list[list[float]]:
-    """Genera embeddings normalizados para varios textos."""
+def create_embeddings(texts: list[str], batch_size: int = 64) -> list[list[float]]:
+    """Genera embeddings normalizados por lotes acotados para documentos grandes."""
 
     if not texts:
         return []
 
     model = get_embedding_model()
 
-    embeddings = model.encode(
-        texts,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-
-    return embeddings.astype(float).tolist()
+    results: list[list[float]] = []
+    for start in range(0, len(texts), max(1, batch_size)):
+        embeddings = model.encode(
+            texts[start:start + max(1, batch_size)],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            batch_size=max(1, batch_size),
+        )
+        results.extend(embeddings.astype(float).tolist())
+    return results
 
 
 def create_embedding(text: str) -> list[float]:

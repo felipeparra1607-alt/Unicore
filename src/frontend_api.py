@@ -4,6 +4,8 @@ import binascii
 import json
 import os
 import tempfile
+import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -30,9 +32,12 @@ from src.curriculum_engine import (
 )
 from src.decision_engine import build_decision_plan
 from src.document_library import (
+    MAXIMUM_DOCUMENT_BYTES,
     get_document_content,
     get_document_file,
     ingest_document_bytes,
+    ingest_document_file,
+    prepare_document,
 )
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
 from src.knowledge_map import build_subject_knowledge_map
@@ -54,6 +59,7 @@ from src.unicore_client import UniCoreMCPClient
 from src.v11_services import (
     academic_map,
     add_professor_criterion,
+    cached_explanation,
     assign_professor,
     create_flashcard_drafts,
     decide_flashcard_draft,
@@ -64,6 +70,7 @@ from src.v11_services import (
     rate_leitner_card,
     record_token_usage,
     student_model,
+    store_explanation_cache,
     study_generation_context,
     token_analytics,
 )
@@ -192,6 +199,35 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
             raise ValueError("El cuerpo debe ser un objeto JSON")
         return payload
 
+    def _receive_binary_upload(self) -> Path:
+        """Escribe el cuerpo binario en disco y valida el tamaño mientras llega."""
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("El tamaño del archivo no es válido") from error
+        if content_length <= 0:
+            raise ValueError("El archivo está vacío")
+        if content_length > MAXIMUM_DOCUMENT_BYTES:
+            raise ValueError("El archivo supera el límite de 50 MB")
+        upload_directory = Path(tempfile.gettempdir()) / "unicore-material-uploads"
+        upload_directory.mkdir(parents=True, exist_ok=True)
+        temporary_path = upload_directory / f"{uuid.uuid4().hex}.uploading"
+        received = 0
+        try:
+            with temporary_path.open("wb") as stream:
+                while received < content_length:
+                    chunk = self.rfile.read(min(1024 * 1024, content_length - received))
+                    if not chunk:
+                        raise ValueError("La subida se interrumpió antes de completarse")
+                    received += len(chunk)
+                    if received > MAXIMUM_DOCUMENT_BYTES:
+                        raise ValueError("El archivo supera el límite de 50 MB")
+                    stream.write(chunk)
+            return temporary_path
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
     def _job_payload(self, job, include_detail: bool = False) -> dict:
         payload = {
             "id": job.job_id,
@@ -317,7 +353,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
         try:
             if parsed.path == "/api/health":
-                self._send_json({"ok": True, "service": "unicore-frontend-api"})
+                self._send_json({"ok": True, "service": "unicore-frontend-api", "upload": {"maximum_document_bytes": MAXIMUM_DOCUMENT_BYTES}})
                 return
 
             if parsed.path == "/api/dashboard":
@@ -625,13 +661,38 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         return
                 topic = str(scope["topic"]) if scope else self._study_topic(payload, subject_id, "explanation")
                 document_id = payload.get("document_id")
+                difficulty = str(payload.get("difficulty", "intermedio"))
+                allowed_document_ids = scope.get("document_ids") if scope else None
+                cached = cached_explanation(
+                    subject_id=subject_id,
+                    document_id=document_id,
+                    curriculum_item_id=scope["item_id"] if scope else None,
+                    topic=topic,
+                    difficulty=difficulty,
+                    allowed_document_ids=allowed_document_ids,
+                )
+                if cached is not None:
+                    conversation = create_conversation(
+                        title=f"Explicación · {topic}"[:180], subject_id=subject_id,
+                        document_id=document_id, context_type="document" if document_id is not None else "subject",
+                    )
+                    append_message(conversation["id"], "user", f"Explícame {topic} paso a paso.")
+                    append_message(conversation["id"], "assistant", cached["content"], sources=cached["sources"])
+                    self._send_json({
+                        "ok": True, "conversation_id": conversation["id"], "topic": topic,
+                        "explanation": cached["content"], "sources": cached["sources"],
+                        "curriculum_item_id": scope["item_id"] if scope else None,
+                        "cache": {"hit": True, "updated_at": cached["updated_at"]},
+                        "usage": {"available": True, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                    }, 200)
+                    return
                 generation_context = study_generation_context(subject_id=subject_id)
                 arguments = {
                     "topic": topic,
                     "subject_id": subject_id,
                     "document_id": document_id,
                     "mode": "explanation",
-                    "difficulty": payload.get("difficulty", "intermedio"),
+                    "difficulty": difficulty,
                     "item_count": 5,
                     "maximum_sources": 4,
                     "maximum_context_characters": 4500,
@@ -680,6 +741,12 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     provider=result.get("provider"),
                     model=result.get("model"),
                 )
+                store_explanation_cache(
+                    subject_id=subject_id, document_id=document_id,
+                    curriculum_item_id=scope["item_id"] if scope else None,
+                    topic=topic, difficulty=difficulty, content=str(result.get("content") or ""),
+                    sources=result.get("sources") or [], allowed_document_ids=allowed_document_ids,
+                )
                 self._send_json({
                     "ok": True,
                     "conversation_id": conversation["id"],
@@ -694,6 +761,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         "curriculum_filtered": scope is not None,
                     },
                     "curriculum_item_id": scope["item_id"] if scope else None,
+                    "cache": {"hit": False},
                     "usage": usage,
                 }, 201)
                 return
@@ -883,25 +951,18 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "error": "Ruta de materiales inválida"}, 404)
                     return
                 subject_id = int(path_parts[2])
-                payload = self._read_json(maximum_bytes=12 * 1024 * 1024)
-                encoded_content = payload.get("content_base64")
-                if not isinstance(encoded_content, str) or not encoded_content:
-                    raise ValueError("El archivo está vacío")
-                try:
-                    file_content = base64.b64decode(encoded_content, validate=True)
-                except (binascii.Error, ValueError) as error:
-                    raise ValueError("No se pudo leer el archivo") from error
-                result = ingest_document_bytes(
-                    file_name=str(payload.get("file_name", "")),
-                    content=file_content,
+                file_name = str(query.get("file_name", [""])[0])
+                temporary_path = self._receive_binary_upload()
+                result = ingest_document_file(
+                    temporary_path=temporary_path,
+                    file_name=file_name,
                     subject_id=subject_id,
-                    title=payload.get("title"),
-                    document_type=str(payload.get("document_type") or "course_material"),
-                    academic_year=payload.get("academic_year"),
-                    semester=payload.get("semester"),
-                    professor_id=payload.get("professor_id"),
+                    document_type="course_material",
                 )
-                self._send_json(result, 200 if result.get("duplicate") else 201)
+                if not result.get("duplicate"):
+                    document_id = int(result["document"]["id"])
+                    threading.Thread(target=prepare_document, args=(document_id,), daemon=True).start()
+                self._send_json(result, 200 if result.get("duplicate") else 202)
                 return
 
             if parsed.path == "/api/conversations":

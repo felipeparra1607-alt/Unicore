@@ -20,7 +20,6 @@ import {
   type CurriculumSubtopic,
   type CurriculumTopic,
   type DashboardData,
-  type DecisionAction,
   type StudyData,
   type TokenUsage,
 } from "../api";
@@ -40,6 +39,7 @@ type ActiveExplanation = {
   content: string;
   sources: AgentSource[];
   usage?: TokenUsage;
+  cacheHit?: boolean;
   startedAt: number;
 };
 
@@ -57,11 +57,9 @@ const shortDate = (value: string) =>
 
 export default function StudyPage({
   launchContext,
-  onStartWorkBlock,
   onConfigureSubject,
 }: {
   launchContext?: StudyLaunchContext;
-  onStartWorkBlock: (action: DecisionAction) => void;
   onConfigureSubject: (subjectId: number) => void;
 }) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
@@ -150,6 +148,7 @@ export default function StudyPage({
         content: result.explanation,
         sources: result.sources,
         usage: result.usage,
+        cacheHit: result.cache?.hit ?? false,
         startedAt: Date.now(),
       });
     } catch (caught) {
@@ -227,29 +226,6 @@ export default function StudyPage({
         topic.subtopics.some((subtopic) => subtopic.id === selected?.id),
     ),
   );
-  const startSelectedBlock = () => {
-    if (!selected || subjectId == null || !curriculum) return;
-    onStartWorkBlock({
-      type: "review",
-      source_id: selected.id,
-      subject_id: subjectId,
-      subject_name: curriculum.subject.name,
-      title: `Trabajar ${selectedUnit?.name ?? selected.name}`,
-      score: 0,
-      priority: "medium",
-      suggested_minutes: duration,
-      allocated_minutes: duration,
-      reasons: ["Tema seleccionado desde el temario real."],
-      action: "study",
-      metadata: {
-        unit_id: selectedUnit?.id,
-        unit_name: selectedUnit?.name,
-        focus_topic_ids: [selected.id],
-        document_ids: uniqueSources.map((source) => source.document_id),
-      },
-    });
-  };
-
   if (loading && !curriculum)
     return (
       <section className="uc-page-shell uc-state-page">
@@ -311,6 +287,7 @@ export default function StudyPage({
                 usage={active.usage}
                 sources={active.sources.length}
               />
+              <p className="uc-cache-note">{active.cacheHit ? "Reutilizada desde la explicación guardada · 0 tokens" : "Explicación guardada para reutilizarla mientras el material no cambie."}</p>
             </article>
           </section>
           <aside className="uc-study-sources">
@@ -545,7 +522,6 @@ export default function StudyPage({
                 </label>
                 <div className="uc-study-actions">
                   <button className="uc-primary-action" disabled={starting || !selected.sources.length} onClick={() => languageReady ? void beginExplanation() : subjectId != null && onConfigureSubject(subjectId)}><BookOpen size={15} /> {starting ? "Preparando…" : "Ver explicación"}</button>
-                  <button onClick={startSelectedBlock}>Iniciar bloque</button>
                 </div>
               </>
             ) : (

@@ -25,6 +25,9 @@ def migrate_v11() -> None:
         _add_column(connection, "documents", "semester", "VARCHAR(40)")
         _add_column(connection, "documents", "professor_id", "INTEGER REFERENCES professors(id)")
         _add_column(connection, "documents", "curriculum_processed_at", "DATETIME")
+        _add_column(connection, "documents", "processing_status", "VARCHAR(30) NOT NULL DEFAULT 'ready'")
+        _add_column(connection, "documents", "processing_stage", "VARCHAR(100)")
+        _add_column(connection, "documents", "processing_error", "TEXT")
         _add_column(connection, "knowledge_concepts", "global_concept_id", "INTEGER REFERENCES global_concepts(id)")
         _add_column(connection, "review_items", "leitner_box", "INTEGER NOT NULL DEFAULT 1")
         _add_column(connection, "review_items", "cognitive_level", "VARCHAR(30) NOT NULL DEFAULT 'mixed'")
@@ -44,6 +47,10 @@ def migrate_v11() -> None:
         connection.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_curriculum_subject_parent "
             "ON curriculum_items (subject_id, parent_id, position)"
+        ))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_explanation_cache_lookup "
+            "ON explanation_cache (subject_id, document_id, curriculum_item_id, topic_key, difficulty)"
         ))
 
 

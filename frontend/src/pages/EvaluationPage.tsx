@@ -583,7 +583,7 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
             )}
           </section>
         )}
-        {revealed &&
+        {(writtenTurn ? Boolean(evaluation) : revealed) &&
           (writtenTurn ? (
             <button
               className="uc-primary-action uc-written-next"
@@ -600,19 +600,19 @@ export default function EvaluationPage({ onConfigureSubject }: { onConfigureSubj
                 disabled={starting}
                 onClick={() => void submitCardRating("difficult")}
               >
-                Difícil
+                No la sabía
               </button>
               <button
                 disabled={starting}
                 onClick={() => void submitCardRating("good")}
               >
-                Bien
+                La sabía
               </button>
               <button
                 disabled={starting}
                 onClick={() => void submitCardRating("easy")}
               >
-                Fácil
+                La dominaba
               </button>
             </div>
           ))}

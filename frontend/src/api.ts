@@ -273,7 +273,8 @@ export type SubjectDocumentsData = {
     id: number; title: string; file_type: string | null; document_type: string | null;
     academic_year: string | null; semester: string | null; professor_id: number | null;
     subject_id: number | null; has_extracted_text: boolean; character_count: number;
-    chunk_count: number; created_at: string | null;
+    chunk_count: number; created_at: string | null; processing_status?: "processing" | "ready" | "error";
+    processing_stage?: string | null; processing_error?: string | null;
   }>;
 };
 
@@ -291,12 +292,11 @@ export function getSubjectDocuments(subjectId: number): Promise<SubjectDocuments
   return requestJson<SubjectDocumentsData>(`/api/subjects/${subjectId}/documents`);
 }
 
-export async function uploadSubjectMaterial(subjectId: number, file: File, metadata: { document_type?: string; academic_year?: string | null; semester?: string | null; professor_id?: number | null } = {}): Promise<{ ok: boolean; duplicate: boolean; message: string; document: SubjectDocumentsData["documents"][number] }> {
-  const contentBase64 = await fileToBase64(file);
-  return requestJson(`/api/subjects/${subjectId}/materials`, {
+export async function uploadSubjectMaterial(subjectId: number, file: File, _metadata: { document_type?: string; academic_year?: string | null; semester?: string | null; professor_id?: number | null } = {}): Promise<{ ok: boolean; duplicate: boolean; message: string; document: SubjectDocumentsData["documents"][number] }> {
+  return requestJson(`/api/subjects/${subjectId}/materials?file_name=${encodeURIComponent(file.name)}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_name: file.name, content_base64: contentBase64, ...metadata }),
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
   });
 }
 
@@ -384,6 +384,7 @@ export type StudyExplanationResponse = {
   curriculum_item_id?: number | null;
   retrieval: { top_k: number; source_count: number; context_characters: number; document_filtered: boolean; curriculum_filtered?: boolean };
   usage?: TokenUsage;
+  cache?: { hit: boolean; updated_at?: string };
 };
 
 export type Flashcard = {

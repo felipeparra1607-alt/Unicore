@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
@@ -13,6 +14,7 @@ from src.ai_config import get_ai_settings
 from src.database.connection import SessionLocal
 from src.database.models import (
     Document,
+    ExplanationCache,
     FlashcardDraft,
     KnowledgeConcept,
     KnowledgeConnection,
@@ -43,6 +45,46 @@ LEITNER_NAMES = {
 }
 COGNITIVE_LEVELS = {"recall", "understanding", "application", "analysis", "mixed"}
 ANSWER_MODES = {"mental", "written", "mixed"}
+
+
+def _explanation_key(topic: str) -> str:
+    return " ".join(re.findall(r"[\wáéíóúüñ]+", topic.casefold(), flags=re.UNICODE))
+
+
+def _explanation_fingerprint(*, subject_id: int, document_id: int | None, allowed_document_ids: list[int] | None, session) -> str:
+    statement = select(Document.id, Document.content_hash, Document.curriculum_processed_at).where(Document.subject_id == subject_id)
+    if document_id is not None:
+        statement = statement.where(Document.id == document_id)
+    elif allowed_document_ids:
+        statement = statement.where(Document.id.in_(allowed_document_ids))
+    rows = session.execute(statement.order_by(Document.id)).all()
+    stable = "|".join(f"{row.id}:{row.content_hash or ''}:{row.curriculum_processed_at or ''}" for row in rows)
+    return hashlib.sha256(stable.encode("utf-8")).hexdigest()
+
+
+def cached_explanation(*, subject_id: int, document_id: int | None, curriculum_item_id: int | None, topic: str, difficulty: str, allowed_document_ids: list[int] | None = None, session_factory=SessionLocal) -> dict[str, Any] | None:
+    with session_factory() as session:
+        fingerprint = _explanation_fingerprint(subject_id=subject_id, document_id=document_id, allowed_document_ids=allowed_document_ids, session=session)
+        statement = select(ExplanationCache).where(
+            ExplanationCache.subject_id == subject_id,
+            ExplanationCache.document_id == document_id,
+            ExplanationCache.curriculum_item_id == curriculum_item_id,
+            ExplanationCache.topic_key == _explanation_key(topic),
+            ExplanationCache.difficulty == difficulty,
+            ExplanationCache.material_fingerprint == fingerprint,
+        ).order_by(ExplanationCache.updated_at.desc())
+        entry = session.scalar(statement)
+        if entry is None:
+            return None
+        return {"content": entry.content, "sources": json.loads(entry.sources_json or "[]"), "fingerprint": fingerprint, "updated_at": entry.updated_at.isoformat()}
+
+
+def store_explanation_cache(*, subject_id: int, document_id: int | None, curriculum_item_id: int | None, topic: str, difficulty: str, content: str, sources: list[dict], allowed_document_ids: list[int] | None = None, session_factory=SessionLocal) -> None:
+    with session_factory() as session:
+        fingerprint = _explanation_fingerprint(subject_id=subject_id, document_id=document_id, allowed_document_ids=allowed_document_ids, session=session)
+        entry = ExplanationCache(subject_id=subject_id, document_id=document_id, curriculum_item_id=curriculum_item_id, topic_key=_explanation_key(topic), difficulty=difficulty, material_fingerprint=fingerprint, content=content, sources_json=json.dumps(sources, ensure_ascii=False))
+        session.add(entry)
+        session.commit()
 
 
 def record_token_usage(

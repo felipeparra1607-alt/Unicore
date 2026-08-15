@@ -181,7 +181,7 @@ export default function App() {
       ) : section === "tasks" ? (
         <TasksPage onStartWorkPlan={startWorkPlan} onNavigate={selectSection} />
       ) : section === "study" ? (
-        <StudyPage launchContext={studyLaunchContext} onStartWorkBlock={setPendingWorkAction} onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
+        <StudyPage launchContext={studyLaunchContext} onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
       ) : section === "evaluation" ? (
         <EvaluationPage onConfigureSubject={(subjectId) => { setSelectedSubjectId(subjectId); setSection("subjects"); }} />
       ) : section === "goals" ? (

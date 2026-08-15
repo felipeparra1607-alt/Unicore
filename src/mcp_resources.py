@@ -637,6 +637,9 @@ def _build_documents(
                 "chunk_count": len(
                     document.chunks
                 ),
+                "processing_status": document.processing_status,
+                "processing_stage": document.processing_stage,
+                "processing_error": document.processing_error,
                 "created_at": (
                     document.created_at
                     .isoformat()
