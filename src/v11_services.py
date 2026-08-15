@@ -536,6 +536,7 @@ def professors_overview(*, session_factory=SessionLocal) -> dict[str, Any]:
 
 def assign_professor(
     *, subject_id: int, professor_id: int | None = None, name: str | None = None,
+    notes: str | None = None,
     session_factory=SessionLocal,
 ) -> dict[str, Any]:
     with session_factory() as session:
@@ -549,7 +550,7 @@ def assign_professor(
             clean_name = " ".join((name or "").split())
             if not clean_name:
                 return {"ok": False, "error": "El nombre es obligatorio"}
-            professor = Professor(name=clean_name, subject_id=subject_id)
+            professor = Professor(name=clean_name, subject_id=subject_id, notes=(notes or "").strip() or None)
             session.add(professor)
             session.flush()
         existing = session.scalar(select(ProfessorAssignment).where(
@@ -559,7 +560,7 @@ def assign_professor(
         if existing is None:
             session.add(ProfessorAssignment(professor_id=professor.id, subject_id=subject_id))
         session.commit()
-        return {"ok": True, "professor": {"id": professor.id, "name": professor.name}}
+        return {"ok": True, "professor": {"id": professor.id, "name": professor.name, "notes": professor.notes}}
 
 
 def add_professor_criterion(
@@ -588,6 +589,8 @@ def add_professor_criterion(
 
 
 def academic_map(*, session_factory=SessionLocal) -> dict[str, Any]:
+    from src.database.models import CurriculumConceptLink, CurriculumItem, GlobalConcept
+
     with session_factory() as session:
         concepts = list(session.scalars(select(KnowledgeConcept).order_by(KnowledgeConcept.name)))
         subjects = {
@@ -596,6 +599,13 @@ def academic_map(*, session_factory=SessionLocal) -> dict[str, Any]:
         }
         connections = list(session.scalars(select(KnowledgeConnection).order_by(KnowledgeConnection.id)))
         by_id = {item.id: item for item in concepts}
+        links = list(session.scalars(select(CurriculumConceptLink)))
+        curriculum_items = {item.id: item for item in session.scalars(select(CurriculumItem))}
+        curriculum_type_by_concept = {
+            link.knowledge_concept_id: curriculum_items[link.curriculum_item_id].item_type
+            for link in links if link.curriculum_item_id in curriculum_items
+        }
+        global_concepts = {item.id: item.name for item in session.scalars(select(GlobalConcept))}
     return {
         "ok": True,
         "concepts": [{
@@ -604,6 +614,8 @@ def academic_map(*, session_factory=SessionLocal) -> dict[str, Any]:
             "subject_id": item.subject_id,
             "subject_name": (subjects.get(item.subject_id) or {}).get("name"),
             "academic_year": (subjects.get(item.subject_id) or {}).get("academic_year"),
+            "curriculum_type": curriculum_type_by_concept.get(item.id),
+            "global_concept": global_concepts.get(item.global_concept_id),
             "mastery": "mastered" if item.status == "strong" else "consolidating" if item.status == "developing" else "not_mastered" if item.status == "weak" else "unassessed",
             "evidence_count": item.evidence_count,
         } for item in concepts],

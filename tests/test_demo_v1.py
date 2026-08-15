@@ -16,6 +16,7 @@ from src.conversation_memory import (
     refresh_summary_if_needed,
 )
 from src.database.migrate_conversations import migrate_conversations
+from src.database.migrate_v11 import migrate_v11
 from src.database.connection import SessionLocal
 from src.database.models import Subject
 from src.document_library import delete_managed_document, get_document_content, ingest_document_bytes
@@ -27,6 +28,7 @@ class DemoV1PersistenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         migrate_conversations()
+        migrate_v11()
         with SessionLocal() as session:
             subject = session.query(Subject).order_by(Subject.id).first()
             cls.created_subject = subject is None
@@ -137,6 +139,7 @@ class DemoV1EndpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         migrate_conversations()
+        migrate_v11()
         with SessionLocal() as session:
             subject = session.query(Subject).order_by(Subject.id).first()
             cls.created_subject = subject is None

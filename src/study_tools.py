@@ -384,6 +384,8 @@ def register_study_tools(mcp) -> None:
         academic_language: str = "Spanish",
         professor_context: str | None = None,
         student_context: str | None = None,
+        allowed_document_ids: list[int] | None = None,
+        allowed_chunk_ids: list[int] | None = None,
     ) -> dict:
         """
         Genera materiales de estudio fundamentados en documentos.
@@ -478,6 +480,8 @@ def register_study_tools(mcp) -> None:
                 subject_id=subject_id,
                 document_id=document_id,
                 semantic_weight=semantic_weight,
+                allowed_document_ids=allowed_document_ids,
+                allowed_chunk_ids=allowed_chunk_ids,
             )
 
             selected_chunks = select_context_chunks(
@@ -660,6 +664,7 @@ def register_study_tools(mcp) -> None:
             "topic": clean_topic,
             "subject_id": subject_id,
             "document_id": document_id,
+            "curriculum_filtered": allowed_chunk_ids is not None or allowed_document_ids is not None,
             "mode": clean_mode,
             "difficulty": clean_difficulty,
             "cognitive_level": clean_cognitive_level,

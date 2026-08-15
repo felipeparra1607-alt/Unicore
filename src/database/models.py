@@ -32,6 +32,11 @@ class Subject(Base):
         default="Spanish",
         nullable=False,
     )
+    academic_language_configured: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -112,6 +117,7 @@ class Document(Base):
         unique=True,
     )
     extracted_text: Mapped[str | None] = mapped_column(Text)
+    curriculum_processed_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
@@ -1199,6 +1205,11 @@ class KnowledgeConcept(Base):
         nullable=False,
     )
 
+    global_concept_id: Mapped[int | None] = mapped_column(
+        ForeignKey("global_concepts.id"),
+        index=True,
+    )
+
     mastery_percentage: Mapped[float | None] = mapped_column(
         Float,
     )
@@ -1407,4 +1418,73 @@ class KnowledgeConnection(Base):
     relationship: Mapped[str] = mapped_column(String(120), default="related", nullable=False)
     source_type: Mapped[str] = mapped_column(String(50), default="manual", nullable=False)
     evidence_reference: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class GlobalConcept(Base):
+    __tablename__ = "global_concepts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(250), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(250), unique=True, nullable=False, index=True)
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    source: Mapped[str] = mapped_column(String(30), default="automatic", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class CurriculumItem(Base):
+    __tablename__ = "curriculum_items"
+    __table_args__ = (
+        UniqueConstraint("subject_id", "item_type", "normalized_name", name="uq_curriculum_subject_type_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("curriculum_items.id", ondelete="SET NULL"), index=True)
+    item_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(250), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(250), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source: Mapped[str] = mapped_column(String(30), default="automatic", nullable=False)
+    manually_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class CurriculumDocumentReference(Base):
+    __tablename__ = "curriculum_document_references"
+    __table_args__ = (
+        UniqueConstraint("curriculum_item_id", "document_id", name="uq_curriculum_document_reference"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curriculum_item_id: Mapped[int] = mapped_column(ForeignKey("curriculum_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_label: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CurriculumChunkReference(Base):
+    __tablename__ = "curriculum_chunk_references"
+    __table_args__ = (
+        UniqueConstraint("curriculum_item_id", "chunk_id", name="uq_curriculum_chunk_reference"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curriculum_item_id: Mapped[int] = mapped_column(ForeignKey("curriculum_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_id: Mapped[int] = mapped_column(ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CurriculumConceptLink(Base):
+    __tablename__ = "curriculum_concept_links"
+    __table_args__ = (
+        UniqueConstraint("curriculum_item_id", "knowledge_concept_id", name="uq_curriculum_concept_link"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curriculum_item_id: Mapped[int] = mapped_column(ForeignKey("curriculum_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    knowledge_concept_id: Mapped[int] = mapped_column(ForeignKey("knowledge_concepts.id", ondelete="CASCADE"), nullable=False, index=True)
+    relationship: Mapped[str] = mapped_column(String(40), default="represents", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -23,6 +23,11 @@ from src.database.connection import SessionLocal
 from src.database.models import Subject
 from src.database.migrate_conversations import migrate_conversations
 from src.database.migrate_v11 import migrate_v11
+from src.curriculum_engine import (
+    backfill_pending_curriculum,
+    curriculum_for_subject,
+    curriculum_scope,
+)
 from src.decision_engine import build_decision_plan
 from src.document_library import (
     get_document_content,
@@ -417,6 +422,16 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(data, 200 if data.get("ok") else 404)
                 return
 
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/curriculum"):
+                path_parts = parsed.path.strip("/").split("/")
+                if len(path_parts) != 4:
+                    self._send_json({"ok": False, "error": "Ruta de temario inválida"}, 404)
+                    return
+                subject_id = int(path_parts[2])
+                data = curriculum_for_subject(subject_id)
+                self._send_json(data, 200 if data.get("ok") else 404)
+                return
+
             if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/professor"):
                 path_parts = parsed.path.strip("/").split("/")
                 if len(path_parts) != 4:
@@ -504,11 +519,33 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/subjects":
                 payload = self._read_json()
+                language = str(payload.get("academic_language", "")).strip().title()
+                if language not in {"English", "Spanish"}:
+                    self._send_json({"ok": False, "error": "Selecciona el idioma académico"}, 400)
+                    return
                 result = self._run_tool("create_subject", {
                     "name": str(payload.get("name", "")),
                     "academic_year": payload.get("academic_year"),
                     "description": payload.get("description"),
                 })
+                if result.get("ok") and isinstance(result.get("subject"), dict):
+                    with SessionLocal() as session:
+                        subject = session.get(Subject, int(result["subject"]["id"]))
+                        if subject is not None:
+                            subject.academic_language = language
+                            subject.academic_language_configured = True
+                            session.commit()
+                    result["subject"]["academic_language"] = language
+                self._send_json(result, 201 if result.get("ok") else 400)
+                return
+
+            if parsed.path == "/api/professors":
+                payload = self._read_json()
+                result = assign_professor(
+                    subject_id=int(payload.get("subject_id")),
+                    name=payload.get("name"),
+                    notes=payload.get("notes"),
+                )
                 self._send_json(result, 201 if result.get("ok") else 400)
                 return
 
@@ -575,10 +612,21 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/study/explanations":
                 payload = self._read_json()
                 subject_id = int(payload.get("subject_id"))
-                topic = self._study_topic(payload, subject_id, "explanation")
+                with SessionLocal() as session:
+                    subject = session.get(Subject, subject_id)
+                    if subject is None or not subject.academic_language_configured:
+                        self._send_json({"ok": False, "error": "Configura primero el idioma académico de la asignatura"}, 409)
+                        return
+                scope = None
+                if payload.get("curriculum_item_id") is not None:
+                    scope = curriculum_scope(subject_id, int(payload["curriculum_item_id"]))
+                    if not scope.get("ok"):
+                        self._send_json(scope, 400)
+                        return
+                topic = str(scope["topic"]) if scope else self._study_topic(payload, subject_id, "explanation")
                 document_id = payload.get("document_id")
                 generation_context = study_generation_context(subject_id=subject_id)
-                result = self._run_tool("generate_study_material", {
+                arguments = {
                     "topic": topic,
                     "subject_id": subject_id,
                     "document_id": document_id,
@@ -589,7 +637,16 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     "maximum_context_characters": 4500,
                     "maximum_output_tokens": 650,
                     **generation_context,
-                })
+                }
+                if scope:
+                    if scope["chunk_ids"]:
+                        arguments["allowed_chunk_ids"] = scope["chunk_ids"]
+                    elif scope["document_ids"]:
+                        arguments["allowed_document_ids"] = scope["document_ids"]
+                    else:
+                        self._send_json({"ok": False, "error": "El tema todavía no tiene fragmentos asociados"}, 422)
+                        return
+                result = self._run_tool("generate_study_material", arguments)
                 if not result.get("ok"):
                     self._send_json(result, 502)
                     return
@@ -633,8 +690,10 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         "top_k": 4,
                         "source_count": result.get("source_count", 0),
                         "context_characters": result.get("context_characters", 0),
-                        "document_filtered": document_id is not None,
+                        "document_filtered": document_id is not None or scope is not None,
+                        "curriculum_filtered": scope is not None,
                     },
+                    "curriculum_item_id": scope["item_id"] if scope else None,
                     "usage": usage,
                 }, 201)
                 return
@@ -642,7 +701,18 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/study/flashcards":
                 payload = self._read_json()
                 subject_id = int(payload.get("subject_id"))
-                topic = self._study_topic(payload, subject_id, "flashcards")
+                with SessionLocal() as session:
+                    subject = session.get(Subject, subject_id)
+                    if subject is None or not subject.academic_language_configured:
+                        self._send_json({"ok": False, "error": "Configura primero el idioma académico de la asignatura"}, 409)
+                        return
+                scope = None
+                if payload.get("curriculum_item_id") is not None:
+                    scope = curriculum_scope(subject_id, int(payload["curriculum_item_id"]))
+                    if not scope.get("ok"):
+                        self._send_json(scope, 400)
+                        return
+                topic = str(scope["topic"]) if scope else self._study_topic(payload, subject_id, "flashcards")
                 document_id = payload.get("document_id")
                 item_count = max(5, min(10, int(payload.get("item_count", 8))))
                 cognitive_level = str(payload.get("cognitive_level", "mixed")).casefold()
@@ -663,7 +733,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         "source_count": len(existing[0].get("sources") or []) if existing else 0,
                     })
                     return
-                result = self._run_tool("generate_study_material", {
+                arguments = {
                     "topic": topic,
                     "subject_id": subject_id,
                     "document_id": document_id,
@@ -675,7 +745,16 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     "maximum_output_tokens": 900,
                     "cognitive_level": cognitive_level,
                     **study_generation_context(subject_id=subject_id),
-                })
+                }
+                if scope:
+                    if scope["chunk_ids"]:
+                        arguments["allowed_chunk_ids"] = scope["chunk_ids"]
+                    elif scope["document_ids"]:
+                        arguments["allowed_document_ids"] = scope["document_ids"]
+                    else:
+                        self._send_json({"ok": False, "error": "El tema todavía no tiene fragmentos asociados"}, 422)
+                        return
+                result = self._run_tool("generate_study_material", arguments)
                 if not result.get("ok"):
                     self._send_json(result, 502)
                     return
@@ -780,6 +859,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     subject_id=subject_id,
                     professor_id=int(payload["professor_id"]) if payload.get("professor_id") is not None else None,
                     name=payload.get("name"),
+                    notes=payload.get("notes"),
                 )
                 self._send_json(result, 201 if result.get("ok") else 400)
                 return
@@ -961,6 +1041,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                         self._send_json({"ok": False, "error": "La asignatura no existe"}, 404)
                         return
                     subject.academic_language = language
+                    subject.academic_language_configured = True
                     session.commit()
                 self._send_json({"ok": True, "subject_id": subject_id, "academic_language": language})
                 return
@@ -992,6 +1073,7 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 def main() -> None:
     migrate_v11()
     migrate_conversations()
+    backfill_pending_curriculum()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)
     print()
     print("UniCore Frontend API")

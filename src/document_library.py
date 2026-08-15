@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from src.chunk_tools import generate_chunks_for_document
+from src.curriculum_engine import build_curriculum_for_document
 from src.database.connection import DATA_DIR, SessionLocal
 from src.database.models import Document, DocumentChunk, Subject
 from src.document_extractors import SUPPORTED_EXTENSIONS, extract_document_text
@@ -133,6 +134,10 @@ def ingest_document_bytes(
         if not chunk_result.get("ok"):
             raise RuntimeError(chunk_result.get("error") or "No se pudo preparar la búsqueda")
 
+        curriculum_result = build_curriculum_for_document(registered_id)
+        if not curriculum_result.get("ok"):
+            raise RuntimeError(curriculum_result.get("error") or "No se pudo construir el temario")
+
         with SessionLocal() as session:
             document = session.get(Document, registered_id)
             if document is None:
@@ -142,6 +147,7 @@ def ingest_document_bytes(
                 "duplicate": False,
                 "message": "Material listo para consultar con UniCore.",
                 "document": _serialize_document(document, int(chunk_result["chunk_count"])),
+                "curriculum": curriculum_result,
             }
     except Exception:
         if registered_id is not None:

@@ -726,6 +726,7 @@ def _build_subject_classes(
                 "id": subject.id,
                 "name": subject.name,
                 "academic_language": subject.academic_language,
+                "academic_language_configured": subject.academic_language_configured,
             },
             "count": len(result),
             "classes": result[:30],
@@ -1073,6 +1074,7 @@ def _build_subject_professor(
                 "id": subject.id,
                 "name": subject.name,
                 "academic_language": subject.academic_language,
+                "academic_language_configured": subject.academic_language_configured,
             },
             "professors": [
                 {

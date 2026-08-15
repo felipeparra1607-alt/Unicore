@@ -106,6 +106,8 @@ def build_academic_prompt(
                 rubric = []
 
         subject_name = subject.name if subject is not None else None
+        academic_language = subject.academic_language if subject is not None else None
+        academic_language_configured = bool(subject and subject.academic_language_configured)
         professor_names = [item.name for item in professors]
         task_data = None
         if task is not None:
@@ -160,6 +162,10 @@ def build_academic_prompt(
     context_lines = []
     if subject_name:
         context_lines.append(f"Asignatura: {subject_name}")
+    if academic_language and academic_language_configured:
+        context_lines.append(f"Idioma académico: {academic_language}")
+    elif subject_name:
+        context_lines.append("Idioma académico: pendiente de confirmar; no asumir idioma")
     if professor_names:
         context_lines.append(f"Profesorado: {', '.join(professor_names)}")
     if document is not None:
@@ -201,7 +207,8 @@ def build_academic_prompt(
     sections.append(
         "INSTRUCCIONES\n"
         "Trabaja únicamente con el contexto proporcionado. Señala cualquier dato que falte en vez de inventarlo. "
-        "Prioriza claridad, precisión académica y cumplimiento explícito de los requisitos."
+        + (f"Redacta el contenido académico en {academic_language}. " if academic_language and academic_language_configured else "")
+        + "Prioriza claridad, precisión académica y cumplimiento explícito de los requisitos."
     )
     sections.append(
         "FORMATO DE RESPUESTA\n"

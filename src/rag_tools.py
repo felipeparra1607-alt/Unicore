@@ -108,6 +108,8 @@ def retrieve_ranked_chunks(
     subject_id: int | None,
     semantic_weight: float,
     document_id: int | None = None,
+    allowed_document_ids: list[int] | None = None,
+    allowed_chunk_ids: list[int] | None = None,
 ) -> list[RankedChunk]:
     """Recupera y ordena todos los chunks compatibles."""
 
@@ -135,6 +137,16 @@ def retrieve_ranked_chunks(
             statement = statement.where(
                 Document.id == document_id
             )
+
+        if allowed_document_ids is not None:
+            if not allowed_document_ids:
+                return []
+            statement = statement.where(Document.id.in_(allowed_document_ids))
+
+        if allowed_chunk_ids is not None:
+            if not allowed_chunk_ids:
+                return []
+            statement = statement.where(DocumentChunk.id.in_(allowed_chunk_ids))
 
         rows = session.execute(statement).all()
 

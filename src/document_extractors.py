@@ -50,7 +50,13 @@ def extract_text_from_docx(file_path: Path) -> str:
         text = paragraph.text.strip()
 
         if text:
-            content.append(text)
+            style_name = str(getattr(paragraph.style, "name", "") or "")
+            if style_name.casefold().startswith("heading"):
+                level_match = "".join(character for character in style_name if character.isdigit())
+                level = max(1, min(3, int(level_match or "1")))
+                content.append(f"{'#' * level} {text}")
+            else:
+                content.append(text)
 
     for table_number, table in enumerate(document.tables, start=1):
         content.append(f"--- Tabla {table_number} ---")
@@ -81,7 +87,7 @@ def extract_text_from_pptx(file_path: Path) -> str:
                 text = shape.text.strip()
 
                 if text:
-                    slide_content.append(text)
+                    slide_content.append(f"# {text}" if shape == slide.shapes.title else text)
 
             if getattr(shape, "has_table", False):
                 for row in shape.table.rows:
