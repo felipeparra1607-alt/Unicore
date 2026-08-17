@@ -25,6 +25,7 @@ def reusable_flashcards(
     *,
     subject_id: int,
     topic: str,
+    curriculum_item_id: int | None = None,
     document_id: int | None = None,
     maximum_items: int = 10,
     session_factory=SessionLocal,
@@ -39,6 +40,7 @@ def reusable_flashcards(
                     ReviewItem.source_attempt_id.is_(None),
                     ReviewItem.source_answer_id.is_(None),
                     ReviewItem.correct_answer.is_not(None),
+                    ReviewItem.status != "rejected",
                 )
                 .order_by(ReviewItem.id)
             )
@@ -46,7 +48,10 @@ def reusable_flashcards(
         return [
             review_item_to_dict(item)
             for item in items
-            if " ".join(item.topic.split()).casefold() == clean_topic
+            if (
+                (curriculum_item_id is not None and item.curriculum_item_id == curriculum_item_id)
+                or (curriculum_item_id is None and " ".join(item.topic.split()).casefold() == clean_topic)
+            )
             and _source_matches_document(item.sources_json, document_id)
         ][:maximum_items]
 
@@ -55,6 +60,7 @@ def persist_flashcards(
     *,
     subject_id: int,
     topic: str,
+    curriculum_item_id: int | None,
     cards: list[dict[str, Any]],
     sources: list[dict[str, Any]],
     document_id: int | None = None,
@@ -71,6 +77,7 @@ def persist_flashcards(
     existing = reusable_flashcards(
         subject_id=subject_id,
         topic=clean_topic,
+        curriculum_item_id=curriculum_item_id,
         document_id=document_id,
         maximum_items=10,
         session_factory=session_factory,
@@ -89,6 +96,7 @@ def persist_flashcards(
                 return {"ok": False, "error": "Cada flashcard necesita pregunta y respuesta"}
             item = ReviewItem(
                 subject_id=subject_id,
+                curriculum_item_id=curriculum_item_id,
                 topic=clean_topic,
                 question=front,
                 correct_answer=back,

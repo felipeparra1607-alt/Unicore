@@ -524,6 +524,11 @@ class ReviewItem(Base):
         nullable=False,
     )
 
+    curriculum_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("curriculum_items.id", ondelete="SET NULL"),
+        index=True,
+    )
+
     source_attempt_id: Mapped[int | None] = mapped_column(
         ForeignKey("study_attempts.id"),
     )
@@ -1355,6 +1360,10 @@ class FlashcardDraft(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id"), nullable=False, index=True)
     document_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id"))
+    curriculum_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("curriculum_items.id", ondelete="SET NULL"),
+        index=True,
+    )
     topic: Mapped[str] = mapped_column(String(250), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1481,8 +1490,61 @@ class CurriculumItem(Base):
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     source: Mapped[str] = mapped_column(String(30), default="automatic", nullable=False)
     manually_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    importance_mode: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
+    manual_importance: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class StudyTopicAnalysis(Base):
+    __tablename__ = "study_topic_analyses"
+    __table_args__ = (
+        UniqueConstraint("curriculum_item_id", name="uq_study_topic_analysis_item"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subjects.id"), nullable=False, index=True
+    )
+    curriculum_item_id: Mapped[int] = mapped_column(
+        ForeignKey("curriculum_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    material_fingerprint: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True
+    )
+    content_load: Mapped[str] = mapped_column(
+        String(20), default="medium", nullable=False
+    )
+    conceptual_complexity: Mapped[str] = mapped_column(
+        String(20), default="medium", nullable=False
+    )
+    academic_importance: Mapped[int] = mapped_column(
+        Integer, default=2, nullable=False
+    )
+    confidence: Mapped[float | None] = mapped_column(Float)
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    source_chunk_ids_json: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=False
+    )
+    diagnostic_questions_json: Mapped[str | None] = mapped_column(Text)
+    diagnostic_answers_json: Mapped[str | None] = mapped_column(Text)
+    diagnostic_scores_json: Mapped[str | None] = mapped_column(Text)
+    diagnostic_mastery: Mapped[float | None] = mapped_column(Float)
+    diagnostic_completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    provider: Mapped[str | None] = mapped_column(String(60))
+    model: Mapped[str | None] = mapped_column(String(120))
+    analysis_version: Mapped[str] = mapped_column(
+        String(30), default="study-analysis-v1", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
 
 class CurriculumDocumentReference(Base):

@@ -19,7 +19,6 @@ from src.database.models import (
     Document,
     DocumentChunk,
     ExplanationCache,
-    FlashcardDraft,
     GlobalConcept,
     KnowledgeConcept,
     KnowledgeConnection,
@@ -66,16 +65,6 @@ _UNIT_NOISE = {
     "unit", "unidad", "chapter", "capitulo", "revised", "updated",
     "revision", "version", "lecture", "slides", "material",
 }
-
-_TOPIC_NOISE = {
-    "case study",
-    "your work",
-    "concept",
-    "review basic concept",
-    "strategic management corporate politic 1",
-    "thank",
-}
-
 
 
 @dataclass
@@ -315,262 +304,6 @@ def _looks_like_plain_heading(line: str, next_line: str | None, previous_was_sou
     return previous_was_source or uppercase or (bool(letters) and title_words / len(letters) >= 0.7 and followed_by_body)
 
 
-def _is_topic_noise(value: str) -> bool:
-    normalized = normalize_curriculum_name(value)
-    return normalized in _TOPIC_NOISE or len(normalized) < 2
-
-
-def _title_only_slide_offsets(lines: list[str], offsets: list[int]) -> set[int]:
-    """Detecta slides separadoras: una diapositiva cuyo contenido útil es solo un título.
-
-    Los encabezados repetidos de curso se ignoran antes de decidir si una página es
-    realmente una slide de título. Es una señal fuerte, no una inferencia generativa.
-    """
-
-    pages: list[list[tuple[int, str]]] = []
-    current: list[tuple[int, str]] = []
-    for index, raw_line in enumerate(lines):
-        line = raw_line.strip()
-        if _SOURCE_LINE.match(line):
-            if current:
-                pages.append(current)
-            current = []
-            continue
-        if line:
-            current.append((index, line))
-    if current:
-        pages.append(current)
-
-    frequencies: dict[str, int] = {}
-    for page in pages:
-        seen_on_page: set[str] = set()
-        for _index, line in page:
-            normalized = normalize_curriculum_name(line)
-            if normalized:
-                seen_on_page.add(normalized)
-        for normalized in seen_on_page:
-            frequencies[normalized] = frequencies.get(normalized, 0) + 1
-
-    result: set[int] = set()
-    for page in pages:
-        useful = [
-            (index, line)
-            for index, line in page
-            if not line.strip().isdigit()
-            and frequencies.get(normalize_curriculum_name(line), 0) < 3
-        ]
-        if len(useful) != 1:
-            continue
-        index, line = useful[0]
-        clean = " ".join(line.strip().rstrip(":").split())
-        if _UNIT_HEADING.match(clean):
-            continue
-        if _is_topic_noise(clean):
-            continue
-        words = clean.split()
-        if not 2 <= len(words) <= 14 or len(clean) > 120:
-            continue
-        if clean.endswith((".", "?", "!", ";")):
-            continue
-        result.add(offsets[index])
-    return result
-
-
-
-def _official_unit_candidates_from_pages(text: str, anchor_name: str) -> list[CurriculumCandidate]:
-    """Construye el temario de un official_unit usando la estructura real de sus páginas.
-
-    Regla principal: una página cuyo contenido útil es solo un título corto abre un Topic.
-    Cabeceras/pies repetidos y números de página se ignoran. Dentro de un Topic, un
-    encabezado corto al inicio de una página con contenido se propone como Subtopic.
-    """
-
-    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True)
-    pages: list[tuple[str | None, list[tuple[str, int]]]] = []
-    current_source: str | None = None
-    current: list[tuple[str, int]] = []
-    cursor = 0
-    for raw_line in raw_lines:
-        line = raw_line.strip()
-        if _SOURCE_LINE.match(line):
-            if current_source is not None or current:
-                pages.append((current_source, current))
-            current_source = line.strip("- ")
-            current = []
-            cursor += len(raw_line)
-            continue
-        if line:
-            current.append((line, cursor))
-        cursor += len(raw_line)
-    if current_source is not None or current:
-        pages.append((current_source, current))
-
-    frequencies: dict[str, int] = {}
-    for _source, page_lines in pages:
-        seen: set[str] = set()
-        for line, _offset in page_lines:
-            clean = " ".join(line.split())
-            if clean.isdigit():
-                continue
-            normalized = normalize_curriculum_name(clean)
-            if normalized:
-                seen.add(normalized)
-        for normalized in seen:
-            frequencies[normalized] = frequencies.get(normalized, 0) + 1
-
-    def useful_lines(page_lines: list[tuple[str, int]]) -> list[tuple[str, int]]:
-        result: list[tuple[str, int]] = []
-        for line, offset in page_lines:
-            clean = " ".join(line.split()).strip()
-            normalized = normalize_curriculum_name(clean)
-            if not clean or clean.isdigit():
-                continue
-            if frequencies.get(normalized, 0) >= 3:
-                continue
-            if _UNIT_HEADING.match(clean):
-                continue
-            if _is_topic_noise(clean):
-                continue
-            # Repeated course mastheads are page furniture, never curriculum Topics.
-            if normalized.startswith("strategic management corporate politic"):
-                continue
-            if normalized in {"unit 1", "review basic concept"}:
-                continue
-            result.append((clean, offset))
-        return result
-
-    def title_like(value: str) -> bool:
-        raw = value.strip()
-        if raw.startswith(("▪", "•", "●", "○", "◦", "‣", "⁃", "- ", "o ")):
-            return False
-        clean = raw
-        if not clean or len(clean) > 120:
-            return False
-        words = clean.split()
-        if not 1 <= len(words) <= 14:
-            return False
-        if clean.endswith((".", ";", ":")):
-            return False
-        letters = [word for word in words if any(ch.isalpha() for ch in word)]
-        if not letters:
-            return False
-        uppercase = clean.isupper()
-        titleish = sum(word[:1].isupper() for word in letters) / len(letters) >= 0.4
-        return uppercase or titleish or clean.endswith("?")
-
-    candidates: list[CurriculumCandidate] = [
-        CurriculumCandidate(
-            item_type="unit",
-            name=anchor_name,
-            start=0,
-            end=len(text),
-            parent_index=None,
-            position=1,
-        )
-    ]
-    current_topic_index: int | None = None
-    topic_position = 0
-    subtopic_position = 0
-    seen_topics: set[str] = set()
-    seen_subtopics_by_topic: dict[int, set[str]] = {}
-
-    for source_label, page_lines in pages:
-        useful = useful_lines(page_lines)
-        if not useful:
-            continue
-
-        # Señal fuerte: slide separadora con un solo título útil.
-        strong_topic: tuple[str, int] | None = None
-        if len(useful) == 1 and title_like(useful[0][0]):
-            candidate_title = useful[0][0].strip()
-            # Un título de una sola palabra (p. ej. "Diagnosis") suele ser una
-            # fase/subapartado visual, no un bloque principal del temario.
-            # Los encabezados numerados internos tampoco sustituyen la unidad real.
-            if len(candidate_title.split()) >= 2 and not re.match(r"^\d+[.)]\s+", candidate_title):
-                strong_topic = useful[0]
-        # SWOT aparece con explicación en la misma página, pero visualmente abre
-        # una sección principal. Conservamos esta señal semántica muy limitada.
-        elif useful and normalize_curriculum_name(useful[0][0]) == "swot analysi":
-            strong_topic = useful[0]
-
-        if strong_topic is not None:
-            name, offset = strong_topic
-            normalized = normalize_curriculum_name(name)
-            if normalized and normalized not in seen_topics:
-                topic_position += 1
-                current_topic_index = len(candidates)
-                subtopic_position = 0
-                seen_topics.add(normalized)
-                seen_subtopics_by_topic[current_topic_index] = set()
-                candidates.append(
-                    CurriculumCandidate(
-                        item_type="topic",
-                        name=name,
-                        start=offset,
-                        end=len(text),
-                        parent_index=0,
-                        position=topic_position,
-                        source_label=source_label,
-                    )
-                )
-            continue
-
-        if current_topic_index is None:
-            continue
-
-        # Una slide separadora de una sola palabra se conserva como Subtopic
-        # del bloque principal actual (Diagnosis, Vision, etc.).
-        if len(useful) == 1 and title_like(useful[0][0]) and len(useful[0][0].split()) == 1:
-            first_name, first_offset = useful[0]
-            normalized = normalize_curriculum_name(first_name)
-            seen = seen_subtopics_by_topic.setdefault(current_topic_index, set())
-            if normalized and normalized not in seen:
-                subtopic_position += 1
-                seen.add(normalized)
-                candidates.append(CurriculumCandidate(
-                    item_type="subtopic", name=first_name, start=first_offset, end=len(text),
-                    parent_index=current_topic_index, position=subtopic_position, source_label=source_label,
-                ))
-            continue
-
-        # Dentro del tema actual, el primer encabezado corto de una página con
-        # contenido puede proponerse como Subtopic. Nunca promovemos bullets/listas.
-        first_name, first_offset = useful[0]
-        if len(useful) >= 2 and title_like(first_name):
-            normalized = normalize_curriculum_name(first_name)
-            topic_normalized = normalize_curriculum_name(candidates[current_topic_index].name)
-            seen = seen_subtopics_by_topic.setdefault(current_topic_index, set())
-            if (
-                normalized
-                and normalized != topic_normalized
-                and normalized not in seen
-                and not _is_topic_noise(first_name)
-            ):
-                subtopic_position += 1
-                seen.add(normalized)
-                candidates.append(
-                    CurriculumCandidate(
-                        item_type="subtopic",
-                        name=first_name,
-                        start=first_offset,
-                        end=len(text),
-                        parent_index=current_topic_index,
-                        position=subtopic_position,
-                        source_label=source_label,
-                    )
-                )
-
-    # Cierra cada bloque cuando comienza otro Topic/Subtopic del mismo o mayor rango.
-    for index, candidate in enumerate(candidates):
-        if candidate.item_type == "unit":
-            continue
-        for later in candidates[index + 1:]:
-            if later.start > candidate.start and _RANK[later.item_type] <= _RANK[candidate.item_type]:
-                candidate.end = later.start
-                break
-    return candidates
-
-
 def extract_curriculum_candidates(text: str, document_title: str) -> list[CurriculumCandidate]:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True)
     offsets: list[int] = []
@@ -579,7 +312,6 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
         offsets.append(cursor)
         cursor += len(line)
 
-    strong_topic_offsets = _title_only_slide_offsets(lines, offsets)
     raw: list[tuple[str, str, int, str | None]] = []
     current_source: str | None = None
     previous_was_source = False
@@ -595,31 +327,27 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
             current_source = line.strip("- ")
             previous_was_source = True
             continue
-
         next_line = next((item.strip() for item in lines[index + 1:] if item.strip()), None)
         markdown = _MARKDOWN_HEADING.match(line)
         numbered = _NUMBERED_HEADING.match(line)
         explicit_unit = _UNIT_HEADING.match(line)
         item_type: str | None = None
         name = line
-        strong_topic = offsets[index] in strong_topic_offsets
 
         if explicit_unit:
             item_type = "topic" if current_unit_seen and _DECIMAL_UNIT_HEADING.match(line) else "unit"
             name = line.rstrip(":")
-        elif strong_topic:
-            item_type = "topic"
-            name = line.rstrip(":")
         elif numbered:
             number = numbered.group(1).rstrip(".)")
             depth = number.count(".") + 1
-            name = numbered.group(2).strip().rstrip(":")
-            if current_topic_seen:
-                item_type = "subtopic"
-            elif depth == 1 and current_unit_seen:
+            # A simple ``1.``/``1)`` inside an explicit unit is normally an
+            # enumerated topic, not a new top-level unit.  Keeping it under the
+            # current unit avoids promoting slide lists to curriculum units.
+            if depth == 1 and current_unit_seen:
                 item_type = "topic"
             else:
                 item_type = "unit" if depth == 1 else "topic" if depth == 2 else "subtopic"
+            name = numbered.group(2).strip().rstrip(":")
         elif markdown:
             level = len(markdown.group(1))
             name = markdown.group(2).strip().rstrip("# ").rstrip(":")
@@ -627,19 +355,16 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
                 item_type = "unit"
             elif level == 1:
                 item_type = "topic"
-            elif current_topic_seen:
-                item_type = "subtopic"
+            elif level == 2:
+                item_type = "topic" if current_unit_seen and not current_topic_seen else "subtopic"
             else:
-                item_type = "topic"
+                item_type = "subtopic"
         elif _looks_like_plain_heading(line, next_line, previous_was_source):
-            item_type = "subtopic" if current_topic_seen else "topic"
-            name = line.rstrip(":")
+            item_type, name = "topic", line.rstrip(":")
 
         previous_was_source = False
         name = " ".join(name.split())
         if item_type is None or len(normalize_curriculum_name(name)) < 2:
-            continue
-        if _is_topic_noise(name):
             continue
         raw.append((item_type, name, offsets[index], current_source))
         if item_type == "unit":
@@ -656,7 +381,7 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
     synthetic_unit: int | None = None
     positions = {"unit": 0, "topic": 0, "subtopic": 0}
 
-    for item_type, name, start, source_label in raw:
+    for raw_index, (item_type, name, start, source_label) in enumerate(raw):
         if item_type != "unit" and current_unit is None:
             if synthetic_unit is None:
                 positions["unit"] += 1
@@ -702,6 +427,7 @@ def extract_curriculum_candidates(text: str, document_title: str) -> list[Curric
                 candidate.end = later.start
                 break
     return candidates
+
 
 def _find_equivalent_item(session, *, subject_id: int, item_type: str, name: str) -> CurriculumItem | None:
     if item_type == "unit":
@@ -863,9 +589,10 @@ def build_curriculum_for_document(document_id: int, *, session_factory=SessionLo
                 candidates=candidates,
             )
             if anchor_name is not None:
-                candidates = _official_unit_candidates_from_pages(
-                    document.extracted_text or "",
-                    anchor_name,
+                candidates = _anchor_official_candidates(
+                    candidates,
+                    anchor_name=anchor_name,
+                    text_length=len(document.extracted_text or ""),
                 )
         current_unit = selected_unit
         skipped = 0
@@ -1131,15 +858,10 @@ def curriculum_for_subject(subject_id: int, *, session_factory=SessionLocal) -> 
         subject = session.get(Subject, subject_id)
         if subject is None:
             return {"ok": False, "error": "La asignatura no existe"}
-        all_items = list(session.scalars(select(CurriculumItem).where(
+        items = list(session.scalars(select(CurriculumItem).where(
             CurriculumItem.subject_id == subject_id,
         ).order_by(CurriculumItem.position, CurriculumItem.id)))
-        items = [
-            item for item in all_items
-            if item.item_type == "unit"
-            or (item.manually_locked and item.source != "rejected")
-        ]
-        item_ids = [item.id for item in all_items]
+        item_ids = [item.id for item in items]
         document_refs = list(session.scalars(select(CurriculumDocumentReference).where(
             CurriculumDocumentReference.curriculum_item_id.in_(item_ids)
         ))) if item_ids else []
@@ -1286,521 +1008,11 @@ def curriculum_for_subject(subject_id: int, *, session_factory=SessionLocal) -> 
             "curriculum_dirty": bool(subject.curriculum_dirty),
         }
 
-def curriculum_review_for_subject(
-    subject_id: int,
-    *,
-    session_factory=SessionLocal,
-) -> dict[str, Any]:
-    """Devuelve Units, Topics y Subtopics como propuesta revisable, sin modificar datos."""
-
-    with session_factory() as session:
-        subject = session.get(Subject, subject_id)
-        if subject is None:
-            return {"ok": False, "error": "La asignatura no existe"}
-
-        items = list(session.scalars(
-            select(CurriculumItem)
-            .where(CurriculumItem.subject_id == subject_id)
-            .order_by(CurriculumItem.position, CurriculumItem.id)
-        ))
-        units = [item for item in items if item.item_type == "unit" and item.parent_id is None]
-        # V1 manual: automatic extraction is intentionally not surfaced in the editor.
-        # Only human-confirmed/manual items are editable and publishable.
-        topics = [
-            item for item in items
-            if item.item_type == "topic"
-            and item.manually_locked
-            and item.source == "manual"
-        ]
-        subtopics = [
-            item for item in items
-            if item.item_type == "subtopic"
-            and item.manually_locked
-            and item.source == "manual"
-        ]
-
-        # A subject may have no curriculum at all once automatic extraction is disabled.
-        # Create only the neutral Unit 1 container; no Topic/Subtopic is inferred.
-        if not units:
-            manual_unit = CurriculumItem(
-                subject_id=subject_id,
-                parent_id=None,
-                item_type="unit",
-                name="Unit 1",
-                normalized_name=normalize_curriculum_name("Unit 1"),
-                position=1,
-                source="manual",
-                manually_locked=True,
-            )
-            session.add(manual_unit)
-            session.commit()
-            session.refresh(manual_unit)
-            units = [manual_unit]
-            items = [manual_unit]
-
-        item_ids = [item.id for item in items]
-
-        document_refs = list(session.scalars(
-            select(CurriculumDocumentReference).where(
-                CurriculumDocumentReference.curriculum_item_id.in_(item_ids)
-            )
-        )) if item_ids else []
-        document_ids = {reference.document_id for reference in document_refs}
-        documents = {
-            document.id: document
-            for document in session.scalars(select(Document).where(Document.id.in_(document_ids)))
-        } if document_ids else {}
-        refs_by_item: dict[int, list[CurriculumDocumentReference]] = {}
-        for reference in document_refs:
-            refs_by_item.setdefault(reference.curriculum_item_id, []).append(reference)
-
-        def source_documents(curriculum_item_ids: list[int]) -> list[dict[str, Any]]:
-            result: list[dict[str, Any]] = []
-            seen_document_ids: set[int] = set()
-            for curriculum_item_id in curriculum_item_ids:
-                for reference in refs_by_item.get(curriculum_item_id, []):
-                    document = documents.get(reference.document_id)
-                    if document is None or document.id in seen_document_ids:
-                        continue
-                    seen_document_ids.add(document.id)
-                    result.append({
-                        "document_id": document.id,
-                        "title": document.title,
-                        "file_type": document.file_type,
-                        "material_type": document.material_type or "other",
-                        "source_label": reference.source_label,
-                    })
-            return result
-
-        def serialize_group(group: list[CurriculumItem]) -> dict[str, Any]:
-            representative = min(group, key=lambda item: (item.position, item.id))
-            rejected = all(item.source == "rejected" for item in group)
-            confirmed = any(item.manually_locked and item.source != "rejected" for item in group)
-            return {
-                "id": representative.id,
-                "merged_item_ids": [item.id for item in group],
-                "name": representative.name,
-                "position": representative.position,
-                "source": representative.source,
-                "confirmed": confirmed,
-                "rejected": rejected,
-                "selected": not rejected,
-                "sources": source_documents([item.id for item in group]),
-            }
-
-        def group_equivalent(values: list[CurriculumItem]) -> list[list[CurriculumItem]]:
-            groups: list[list[CurriculumItem]] = []
-            for candidate in values:
-                match = next((
-                    group for group in groups
-                    if candidate.normalized_name == group[0].normalized_name
-                    or curriculum_name_similarity(candidate.name, group[0].name) >= 2 / 3
-                ), None)
-                if match is None:
-                    groups.append([candidate])
-                else:
-                    match.append(candidate)
-            return groups
-
-        unit_groups: list[list[CurriculumItem]] = []
-        for unit in units:
-            match = next((
-                group for group in unit_groups
-                if normalize_curriculum_name(group[0].name) == unit.normalized_name
-                or units_are_strong_match(group[0].name, unit.name)
-            ), None)
-            if match is None:
-                unit_groups.append([unit])
-            else:
-                match.append(unit)
-
-        review_units: list[dict[str, Any]] = []
-        for unit_group in unit_groups:
-            canonical_unit = min(unit_group, key=lambda item: (item.position, item.id))
-            unit_ids = {item.id for item in unit_group}
-            topic_groups = group_equivalent([topic for topic in topics if topic.parent_id in unit_ids])
-            candidate_topics: list[dict[str, Any]] = []
-
-            for topic_group in topic_groups:
-                topic_data = serialize_group(topic_group)
-                topic_ids = {item.id for item in topic_group}
-                subtopic_groups = group_equivalent([
-                    subtopic for subtopic in subtopics if subtopic.parent_id in topic_ids
-                ])
-                serialized_subtopics = [serialize_group(group) for group in subtopic_groups]
-                serialized_subtopics.sort(key=lambda item: (item["position"], item["id"]))
-                topic_data["subtopics"] = serialized_subtopics
-                topic_data["subtopic_count"] = len(serialized_subtopics)
-                topic_data["confirmed_subtopic_count"] = sum(
-                    1 for item in serialized_subtopics if item["confirmed"]
-                )
-                candidate_topics.append(topic_data)
-
-            candidate_topics.sort(key=lambda item: (item["position"], item["id"]))
-            review_units.append({
-                "id": canonical_unit.id,
-                "merged_item_ids": [unit.id for unit in unit_group],
-                "name": canonical_unit.name,
-                "position": canonical_unit.position,
-                "source": canonical_unit.source,
-                "sources": source_documents([unit.id for unit in unit_group]),
-                "topics": candidate_topics,
-                "topic_count": len(candidate_topics),
-                "confirmed_topic_count": sum(1 for topic in candidate_topics if topic["confirmed"]),
-            })
-
-        review_units.sort(key=lambda item: (item["position"], item["id"]))
-        return {
-            "ok": True,
-            "subject": {"id": subject.id, "name": subject.name},
-            "units": review_units,
-            "unit_count": len(review_units),
-            "candidate_topic_count": sum(unit["topic_count"] for unit in review_units),
-            "confirmed_topic_count": sum(unit["confirmed_topic_count"] for unit in review_units),
-            "curriculum_dirty": bool(subject.curriculum_dirty),
-        }
-
-
-def reset_curriculum_for_subject(
-    subject_id: int,
-    *,
-    session_factory=SessionLocal,
-) -> dict[str, Any]:
-    """Borra Topics/Subtopics del temario sin borrar materiales ni la asignatura.
-
-    Mantiene una única Unit 1 manual para que el usuario pueda reconstruir el
-    temario desde cero. Las flashcards existentes no se borran: simplemente
-    dejan de apuntar a elementos curriculares eliminados.
-    """
-    with session_factory() as session:
-        subject = session.get(Subject, subject_id)
-        if subject is None:
-            return {"ok": False, "error": "La asignatura no existe"}
-
-        items = list(session.scalars(select(CurriculumItem).where(
-            CurriculumItem.subject_id == subject_id,
-        )))
-        topic_ids = [item.id for item in items if item.item_type in {"topic", "subtopic"}]
-
-        if topic_ids:
-            # References without FK guarantees are cleaned explicitly.
-            session.execute(delete(ExplanationCache).where(
-                ExplanationCache.curriculum_item_id.in_(topic_ids)
-            ))
-            session.execute(delete(CurriculumChunkReference).where(
-                CurriculumChunkReference.curriculum_item_id.in_(topic_ids)
-            ))
-            session.execute(delete(CurriculumDocumentReference).where(
-                CurriculumDocumentReference.curriculum_item_id.in_(topic_ids)
-            ))
-            session.execute(delete(CurriculumConceptLink).where(
-                CurriculumConceptLink.curriculum_item_id.in_(topic_ids)
-            ))
-            session.execute(update(ReviewItem).where(
-                ReviewItem.curriculum_item_id.in_(topic_ids)
-            ).values(curriculum_item_id=None))
-            session.execute(update(FlashcardDraft).where(
-                FlashcardDraft.curriculum_item_id.in_(topic_ids)
-            ).values(curriculum_item_id=None))
-
-            # Children first, then parents.
-            session.execute(delete(CurriculumItem).where(
-                CurriculumItem.id.in_(topic_ids),
-                CurriculumItem.item_type == "subtopic",
-            ))
-            session.execute(delete(CurriculumItem).where(
-                CurriculumItem.id.in_(topic_ids),
-                CurriculumItem.item_type == "topic",
-            ))
-
-        units = list(session.scalars(select(CurriculumItem).where(
-            CurriculumItem.subject_id == subject_id,
-            CurriculumItem.item_type == "unit",
-            CurriculumItem.parent_id.is_(None),
-        ).order_by(CurriculumItem.position, CurriculumItem.id)))
-
-        if units:
-            unit = units[0]
-            unit.name = "Unit 1"
-            unit.normalized_name = normalize_curriculum_name("Unit 1")
-            unit.position = 1
-            unit.source = "manual"
-            unit.manually_locked = True
-            # Remove duplicate empty units to leave a clean manual structure.
-            for extra in units[1:]:
-                session.execute(update(Document).where(
-                    Document.curriculum_unit_id == extra.id
-                ).values(curriculum_unit_id=unit.id))
-                session.delete(extra)
-        else:
-            unit = CurriculumItem(
-                subject_id=subject_id,
-                parent_id=None,
-                item_type="unit",
-                name="Unit 1",
-                normalized_name=normalize_curriculum_name("Unit 1"),
-                position=1,
-                source="manual",
-                manually_locked=True,
-            )
-            session.add(unit)
-            session.flush()
-
-        subject.curriculum_dirty = False
-        session.commit()
-
-    result = curriculum_review_for_subject(subject_id, session_factory=session_factory)
-    result.update({"reset": True, "removed_item_count": len(topic_ids)})
-    return result
-
-
-def save_curriculum_review(
-    subject_id: int,
-    payload: dict[str, Any],
-    *,
-    session_factory=SessionLocal,
-) -> dict[str, Any]:
-    """Guarda el temario manual como fuente canónica.
-
-    La carga enviada por el editor representa el estado final deseado. Los
-    elementos omitidos dejan de publicarse. Si una extracción automática
-    antigua creó ya un nombre idéntico, reutilizamos esa fila en vez de crear
-    un duplicado que choque con la restricción UNIQUE.
-    """
-    unit_id_value = payload.get("unit_id")
-    topics_payload = payload.get("topics")
-    if unit_id_value is None:
-        return {"ok": False, "error": "unit_id es obligatorio"}
-    if not isinstance(topics_payload, list):
-        return {"ok": False, "error": "topics debe ser una lista"}
-    try:
-        unit_id = int(unit_id_value)
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "unit_id no es válido"}
-
-    def clean_name(value: Any) -> str:
-        return " ".join(str(value or "").strip().split())
-
-    with session_factory() as session:
-        subject = session.get(Subject, subject_id)
-        unit = session.get(CurriculumItem, unit_id)
-        if subject is None:
-            return {"ok": False, "error": "La asignatura no existe"}
-        if unit is None or unit.subject_id != subject_id or unit.item_type != "unit":
-            return {"ok": False, "error": "La unidad no pertenece a la asignatura"}
-
-        all_topics = list(session.scalars(select(CurriculumItem).where(
-            CurriculumItem.subject_id == subject_id,
-            CurriculumItem.item_type == "topic",
-        )))
-        all_subtopics = list(session.scalars(select(CurriculumItem).where(
-            CurriculumItem.subject_id == subject_id,
-            CurriculumItem.item_type == "subtopic",
-        )))
-        topics_by_id = {item.id: item for item in all_topics}
-        subtopics_by_id = {item.id: item for item in all_subtopics}
-        topic_by_normalized = {item.normalized_name: item for item in all_topics}
-        subtopic_by_normalized = {item.normalized_name: item for item in all_subtopics}
-
-        requested_topic_ids: set[int] = set()
-        requested_subtopic_ids: set[int] = set()
-        requested_topic_names: set[str] = set()
-        confirmed_count = created_count = 0
-        confirmed_subtopic_count = created_subtopic_count = 0
-
-        def copy_references(source_item_id: int, target_item: CurriculumItem) -> None:
-            existing_doc_ids = set(session.scalars(select(CurriculumDocumentReference.document_id).where(
-                CurriculumDocumentReference.curriculum_item_id == target_item.id
-            )))
-            for reference in session.scalars(select(CurriculumDocumentReference).where(
-                CurriculumDocumentReference.curriculum_item_id == source_item_id
-            )):
-                if reference.document_id not in existing_doc_ids:
-                    session.add(CurriculumDocumentReference(
-                        curriculum_item_id=target_item.id,
-                        document_id=reference.document_id,
-                        source_label=reference.source_label,
-                    ))
-                    existing_doc_ids.add(reference.document_id)
-
-            existing_chunk_ids = set(session.scalars(select(CurriculumChunkReference.chunk_id).where(
-                CurriculumChunkReference.curriculum_item_id == target_item.id
-            )))
-            for chunk_id in session.scalars(select(CurriculumChunkReference.chunk_id).where(
-                CurriculumChunkReference.curriculum_item_id == source_item_id
-            )):
-                if chunk_id not in existing_chunk_ids:
-                    session.add(CurriculumChunkReference(
-                        curriculum_item_id=target_item.id,
-                        chunk_id=chunk_id,
-                    ))
-                    existing_chunk_ids.add(chunk_id)
-
-        try:
-            for position, topic_payload in enumerate(topics_payload, start=1):
-                if not isinstance(topic_payload, dict):
-                    raise ValueError("Cada Topic debe ser un objeto")
-                if not bool(topic_payload.get("selected", True)):
-                    continue
-
-                name = clean_name(topic_payload.get("name"))
-                if not name:
-                    raise ValueError("Un Topic no puede tener el nombre vacío")
-                normalized = normalize_curriculum_name(name)
-                if not normalized or normalized in requested_topic_names:
-                    raise ValueError(f"El Topic '{name}' no es válido o está repetido")
-                requested_topic_names.add(normalized)
-
-                topic = None
-                topic_id_value = topic_payload.get("id")
-                if topic_id_value is not None:
-                    try:
-                        candidate_id = int(topic_id_value)
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError("Hay un Topic con ID no válido") from exc
-                    candidate = topics_by_id.get(candidate_id)
-                    if candidate is not None and candidate.subject_id == subject_id:
-                        topic = candidate
-
-                if topic is None:
-                    topic = topic_by_normalized.get(normalized)
-
-                if topic is None:
-                    topic = CurriculumItem(
-                        subject_id=subject_id,
-                        parent_id=unit.id,
-                        item_type="topic",
-                        name=name,
-                        normalized_name=normalized,
-                        position=position,
-                        source="manual",
-                        manually_locked=True,
-                    )
-                    session.add(topic)
-                    session.flush()
-                    topics_by_id[topic.id] = topic
-                    topic_by_normalized[normalized] = topic
-                    copy_references(unit.id, topic)
-                    created_count += 1
-                else:
-                    topic.parent_id = unit.id
-                    topic.name = name
-                    topic.normalized_name = normalized
-                    topic.position = position
-                    topic.source = "manual"
-                    topic.manually_locked = True
-                    session.flush()
-
-                requested_topic_ids.add(topic.id)
-                confirmed_count += 1
-
-                sub_payloads = topic_payload.get("subtopics", [])
-                if sub_payloads is None:
-                    sub_payloads = []
-                if not isinstance(sub_payloads, list):
-                    raise ValueError("subtopics debe ser una lista")
-
-                seen_subtopic_names: set[str] = set()
-                for sub_position, sub_payload in enumerate(sub_payloads, start=1):
-                    if not isinstance(sub_payload, dict):
-                        raise ValueError("Cada Subtopic debe ser un objeto")
-                    if not bool(sub_payload.get("selected", True)):
-                        continue
-                    sub_name = clean_name(sub_payload.get("name"))
-                    if not sub_name:
-                        raise ValueError("Un Subtopic no puede tener el nombre vacío")
-                    sub_normalized = normalize_curriculum_name(sub_name)
-                    if not sub_normalized or sub_normalized in seen_subtopic_names:
-                        raise ValueError(f"El Subtopic '{sub_name}' no es válido o está repetido dentro de '{name}'")
-                    seen_subtopic_names.add(sub_normalized)
-
-                    subtopic = None
-                    sub_id_value = sub_payload.get("id")
-                    if sub_id_value is not None:
-                        try:
-                            candidate_sub_id = int(sub_id_value)
-                        except (TypeError, ValueError) as exc:
-                            raise ValueError("Hay un Subtopic con ID no válido") from exc
-                        candidate_sub = subtopics_by_id.get(candidate_sub_id)
-                        if candidate_sub is not None and candidate_sub.subject_id == subject_id:
-                            subtopic = candidate_sub
-
-                    # The DB unique key is subject+type+name, so reuse any old
-                    # automatic/rejected row with the same normalized name.
-                    if subtopic is None:
-                        subtopic = subtopic_by_normalized.get(sub_normalized)
-
-                    if subtopic is None:
-                        subtopic = CurriculumItem(
-                            subject_id=subject_id,
-                            parent_id=topic.id,
-                            item_type="subtopic",
-                            name=sub_name,
-                            normalized_name=sub_normalized,
-                            position=sub_position,
-                            source="manual",
-                            manually_locked=True,
-                        )
-                        session.add(subtopic)
-                        session.flush()
-                        subtopics_by_id[subtopic.id] = subtopic
-                        subtopic_by_normalized[sub_normalized] = subtopic
-                        copy_references(topic.id, subtopic)
-                        created_subtopic_count += 1
-                    else:
-                        subtopic.parent_id = topic.id
-                        subtopic.name = sub_name
-                        subtopic.normalized_name = sub_normalized
-                        subtopic.position = sub_position
-                        subtopic.source = "manual"
-                        subtopic.manually_locked = True
-                        session.flush()
-
-                    requested_subtopic_ids.add(subtopic.id)
-                    confirmed_subtopic_count += 1
-
-            # Anything not present in the editor is explicitly rejected. This
-            # includes leftovers from the old automatic extractor.
-            for subtopic in all_subtopics:
-                if subtopic.id not in requested_subtopic_ids:
-                    subtopic.source = "rejected"
-                    subtopic.manually_locked = True
-            for topic in all_topics:
-                if topic.id not in requested_topic_ids:
-                    topic.source = "rejected"
-                    topic.manually_locked = True
-
-            unit.source = "manual"
-            unit.manually_locked = True
-            subject.curriculum_dirty = False
-            session.commit()
-        except ValueError as exc:
-            session.rollback()
-            return {"ok": False, "error": str(exc)}
-        except Exception as exc:
-            session.rollback()
-            return {"ok": False, "error": f"No se pudo guardar el temario: {exc}"}
-
-    review = curriculum_review_for_subject(subject_id, session_factory=session_factory)
-    review.update({
-        "saved": True,
-        "confirmed_in_request": confirmed_count,
-        "created_in_request": created_count,
-        "confirmed_subtopics_in_request": confirmed_subtopic_count,
-        "created_subtopics_in_request": created_subtopic_count,
-    })
-    return review
 
 def curriculum_scope(subject_id: int, item_id: int, *, session_factory=SessionLocal) -> dict[str, Any]:
     with session_factory() as session:
         item = session.get(CurriculumItem, item_id)
-        if (
-            item is None
-            or item.subject_id != subject_id
-            or item.item_type not in {"topic", "subtopic"}
-            or not item.manually_locked
-            or item.source == "rejected"
-        ):
+        if item is None or item.subject_id != subject_id or item.item_type not in {"topic", "subtopic"}:
             return {"ok": False, "error": "El tema curricular no está disponible"}
         parent = session.get(CurriculumItem, item.parent_id) if item.parent_id else None
         unit = parent if parent and parent.item_type == "unit" else session.get(CurriculumItem, parent.parent_id) if parent and parent.parent_id else None

@@ -556,7 +556,15 @@ export function deleteSubjectMaterial(
   return requestJson(`/api/documents/${documentId}`, { method: "DELETE" });
 }
 
-export function rebuildSubjectCurriculum(
+/**
+ * Compatibilidad con componentes antiguos.
+ *
+ * El Curriculum ya NO se reconstruye automáticamente desde los materiales.
+ * Este método únicamente vuelve a leer del backend el material y el temario
+ * confirmado para que los componentes que todavía usan el nombre histórico
+ * `rebuildSubjectCurriculum` puedan refrescar su estado sin generar Topics.
+ */
+export async function rebuildSubjectCurriculum(
   subjectId: number,
 ): Promise<{
   ok: boolean;
@@ -566,9 +574,19 @@ export function rebuildSubjectCurriculum(
   curriculum_dirty: boolean;
   embeddings_reused: boolean;
 }> {
-  return requestJson(`/api/subjects/${subjectId}/curriculum/rebuild`, {
-    method: "POST",
-  });
+  const [documents, curriculum] = await Promise.all([
+    getSubjectDocuments(subjectId),
+    getCurriculum(subjectId),
+  ]);
+
+  return {
+    ok: documents.ok && curriculum.ok,
+    document_count: documents.count ?? documents.documents.length,
+    processed_count: 0,
+    removed_item_count: 0,
+    curriculum_dirty: curriculum.curriculum_dirty,
+    embeddings_reused: true,
+  };
 }
 
 export function retryDocumentProcessing(
@@ -757,6 +775,7 @@ export type StudyExplanationResponse = {
 export type Flashcard = {
   id: number;
   subject_id: number;
+  curriculum_item_id?: number | null;
   topic: string;
   question: string;
   correct_answer: string;
@@ -777,6 +796,7 @@ export type FlashcardDraft = {
   id: number;
   subject_id: number;
   document_id: number | null;
+  curriculum_item_id?: number | null;
   topic: string;
   question: string;
   correct_answer: string;
@@ -1211,6 +1231,263 @@ export type CurriculumData = {
 };
 export function getCurriculum(subjectId: number): Promise<CurriculumData> {
   return requestJson(`/api/subjects/${subjectId}/curriculum`);
+}
+
+export type StudyPriorityItem = {
+  item_id: number;
+  item_type: "topic" | "subtopic";
+  name: string;
+  parent_id: number | null;
+  importance_mode: "auto" | "manual" | "unicore";
+  manual_importance: 1 | 2 | 3 | null;
+  importance_level: 1 | 2 | 3;
+  importance_label: "Baja" | "Media" | "Alta";
+  automatic_importance_score: number;
+  content_characters: number;
+  chunk_count: number;
+  subtopic_count: number;
+  flashcard_count: number;
+  flashcard_reviews: number;
+  flashcard_errors: number;
+  flashcard_accuracy: number | null;
+  quiz_count: number;
+  quiz_average: number | null;
+  mastery: number | null;
+  personal_difficulty: number | null;
+  diagnostic_mastery: number | null;
+  content_complexity: "low" | "medium" | "high" | null;
+  content_load: "low" | "medium" | "high" | null;
+  analysis_available: boolean;
+  analysis_stale: boolean;
+  importance_source: "manual" | "unicore" | "fallback";
+  days_since_activity: number | null;
+  priority_score: number;
+  priority_label: "Muy alta" | "Alta" | "Media" | "Baja";
+  estimated_minutes: number;
+  needs_diagnostic: boolean;
+};
+
+export type StudyPriorityData = {
+  ok: boolean;
+  subject: { id: number; name: string };
+  items: StudyPriorityItem[];
+  recommendations: StudyPriorityItem[];
+  method: {
+    importance: string;
+    mastery: string;
+    difficulty: string;
+    note: string;
+  };
+};
+
+export function getStudyPriority(subjectId: number): Promise<StudyPriorityData> {
+  return requestJson(`/api/subjects/${subjectId}/study-priority`);
+}
+
+export function setCurriculumImportance(
+  itemId: number,
+  mode: "unicore" | "manual",
+  level?: 1 | 2 | 3,
+): Promise<{
+  ok: boolean;
+  item_id: number;
+  importance_mode: "unicore" | "manual";
+  manual_importance: 1 | 2 | 3 | null;
+}> {
+  return requestJson(`/api/curriculum/items/${itemId}/importance`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, level: mode === "manual" ? level : null }),
+  });
+}
+
+export type StudyTopicDiagnosticQuestion = {
+  level: "medium" | "hard";
+  question: string;
+};
+
+export type StudyTopicDiagnosticScore = {
+  level: "medium" | "hard";
+  score: number;
+  feedback: string;
+};
+
+export type StudyTopicAnalysis = {
+  item_id: number;
+  subject_id: number;
+  material_fingerprint: string;
+  stale: boolean;
+  content_load: "low" | "medium" | "high";
+  content_load_label: "Baja" | "Media" | "Alta";
+  conceptual_complexity: "low" | "medium" | "high";
+  conceptual_complexity_label: "Baja" | "Media" | "Alta";
+  academic_importance: 1 | 2 | 3;
+  academic_importance_label: "Baja" | "Media" | "Alta";
+  confidence: number | null;
+  estimated_minutes: number | null;
+  rationale: string | null;
+  source_chunk_count: number;
+  diagnostic_available: boolean;
+  diagnostic_questions: StudyTopicDiagnosticQuestion[];
+  diagnostic_completed: boolean;
+  diagnostic_mastery: number | null;
+  diagnostic_scores: StudyTopicDiagnosticScore[];
+  provider: string | null;
+  model: string | null;
+  analysis_version: string;
+  updated_at: string | null;
+};
+
+export type StudyTopicAnalysisResponse = {
+  ok: boolean;
+  analysis: StudyTopicAnalysis | null;
+  cache_hit?: boolean;
+  mastery?: number;
+  item?: { id: number; name: string; type: "topic" | "subtopic" };
+};
+
+export function getStudyTopicAnalysis(itemId: number): Promise<StudyTopicAnalysisResponse> {
+  return requestJson(`/api/curriculum/items/${itemId}/analysis`);
+}
+
+export function analyzeStudyTopic(
+  itemId: number,
+  force = false,
+): Promise<StudyTopicAnalysisResponse> {
+  return requestJson(`/api/curriculum/items/${itemId}/analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+}
+
+export function createStudyTopicDiagnostic(itemId: number): Promise<StudyTopicAnalysisResponse> {
+  return requestJson(`/api/curriculum/items/${itemId}/analysis/diagnostic`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export function gradeStudyTopicDiagnostic(
+  itemId: number,
+  answers: [string, string],
+): Promise<StudyTopicAnalysisResponse> {
+  return requestJson(`/api/curriculum/items/${itemId}/analysis/diagnostic/grade`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers }),
+  });
+}
+
+export type CurriculumReviewSource = {
+  document_id: number;
+  title: string;
+  file_type: string | null;
+  material_type?: MaterialType;
+  source_label: string | null;
+};
+
+export type CurriculumReviewSubtopic = {
+  id: number;
+  name: string;
+  position: number;
+  source: "automatic" | "manual" | "rejected";
+  confirmed: boolean;
+  rejected: boolean;
+  selected: boolean;
+  sources: CurriculumReviewSource[];
+};
+
+export type CurriculumReviewTopic = {
+  id: number;
+  merged_item_ids: number[];
+  name: string;
+  position: number;
+  source: "automatic" | "manual" | "rejected";
+  confirmed: boolean;
+  rejected: boolean;
+  selected: boolean;
+  sources: CurriculumReviewSource[];
+  subtopics: CurriculumReviewSubtopic[];
+};
+
+export type CurriculumReviewUnit = {
+  id: number;
+  merged_item_ids: number[];
+  name: string;
+  position: number;
+  source: "automatic" | "manual" | "rejected";
+  sources: CurriculumReviewSource[];
+  topics: CurriculumReviewTopic[];
+  topic_count: number;
+  confirmed_topic_count: number;
+};
+
+export type CurriculumReviewData = {
+  ok: boolean;
+  subject: {
+    id: number;
+    name: string;
+  };
+  units: CurriculumReviewUnit[];
+  unit_count: number;
+  candidate_topic_count: number;
+  confirmed_topic_count: number;
+  curriculum_dirty: boolean;
+  saved?: boolean;
+  confirmed_in_request?: number;
+  rejected_in_request?: number;
+  created_in_request?: number;
+};
+
+export type CurriculumReviewSubtopicInput = {
+  id?: number;
+  name: string;
+  selected: boolean;
+};
+
+export type CurriculumReviewTopicInput = {
+  id?: number;
+  name: string;
+  selected: boolean;
+  subtopics: CurriculumReviewSubtopicInput[];
+};
+
+export function getCurriculumReview(
+  subjectId: number,
+): Promise<CurriculumReviewData> {
+  return requestJson<CurriculumReviewData>(
+    `/api/subjects/${subjectId}/curriculum/review`,
+  );
+}
+
+export function resetCurriculum(
+  subjectId: number,
+): Promise<CurriculumReviewData & { reset?: boolean; removed_item_count?: number }> {
+  return requestJson(`/api/subjects/${subjectId}/curriculum/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export function saveCurriculumReview(
+  subjectId: number,
+  unitId: number,
+  topics: CurriculumReviewTopicInput[],
+): Promise<CurriculumReviewData> {
+  return requestJson<CurriculumReviewData>(
+    `/api/subjects/${subjectId}/curriculum/review`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        unit_id: unitId,
+        topics,
+      }),
+    },
+  );
 }
 
 export type JobSummary = {

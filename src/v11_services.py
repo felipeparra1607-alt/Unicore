@@ -189,6 +189,7 @@ def create_flashcard_drafts(
     sources: list[dict[str, Any]],
     cognitive_level: str,
     answer_mode: str,
+    curriculum_item_id: int | None = None,
     document_id: int | None = None,
     session_factory=SessionLocal,
 ) -> list[dict[str, Any]]:
@@ -212,6 +213,7 @@ def create_flashcard_drafts(
             draft = FlashcardDraft(
                 subject_id=subject_id,
                 document_id=document_id,
+                curriculum_item_id=curriculum_item_id,
                 topic=topic,
                 question=question,
                 correct_answer=answer,
@@ -233,6 +235,7 @@ def flashcard_draft_to_dict(item: FlashcardDraft) -> dict[str, Any]:
         "id": item.id,
         "subject_id": item.subject_id,
         "document_id": item.document_id,
+        "curriculum_item_id": item.curriculum_item_id,
         "topic": item.topic,
         "question": item.question,
         "correct_answer": item.correct_answer,
@@ -267,6 +270,7 @@ def decide_flashcard_draft(
             return {"ok": True, "accepted": False, "draft": flashcard_draft_to_dict(draft)}
         item = ReviewItem(
             subject_id=draft.subject_id,
+            curriculum_item_id=draft.curriculum_item_id,
             topic=draft.topic,
             question=draft.question,
             correct_answer=draft.correct_answer,

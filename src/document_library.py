@@ -8,7 +8,6 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 
 from src.chunk_tools import generate_chunks_for_document
-from src.curriculum_engine import build_curriculum_for_document
 from src.database.connection import DATA_DIR, SessionLocal
 from src.database.models import (
     ClassSession,
@@ -119,10 +118,10 @@ def _update_processing(document_id: int, status: str, stage: str | None, error: 
 
 
 def prepare_document(document_id: int) -> dict:
-    """Extrae, indexa y organiza un documento ya persistido.
+    """Extrae e indexa un documento ya persistido.
 
-    Se ejecuta fuera de la petición HTTP; un fallo conserva el archivo para que el
-    usuario pueda ver qué ocurrió y reintentar sin volver a subirlo.
+    El temario NO se crea ni se modifica al subir materiales. La estructura de
+    estudio es manual en esta versión y se gestiona desde Estudio.
     """
     with SessionLocal() as session:
         document = session.get(Document, document_id)
@@ -147,18 +146,18 @@ def prepare_document(document_id: int) -> dict:
         if not chunk_result.get("ok"):
             raise RuntimeError(chunk_result.get("error") or "No se pudo preparar la búsqueda")
 
-        _update_processing(document_id, "processing", "Organizando temario…")
-        curriculum_result = build_curriculum_for_document(document_id)
-        if not curriculum_result.get("ok"):
-            raise RuntimeError(curriculum_result.get("error") or "No se pudo organizar el temario")
-
         _update_processing(document_id, "ready", "Listo")
         with SessionLocal() as session:
             document = session.get(Document, document_id)
             return {
                 "ok": True,
                 "document": _serialize_document(document, int(chunk_result["chunk_count"])),
-                "curriculum": curriculum_result,
+                "curriculum": {
+                    "ok": True,
+                    "processed": False,
+                    "mode": "manual",
+                    "message": "La subida de materiales no modifica el temario.",
+                },
             }
     except Exception as error:
         _update_processing(document_id, "error", "No se pudo preparar", str(error))

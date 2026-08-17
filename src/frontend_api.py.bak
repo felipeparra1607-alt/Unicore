@@ -27,14 +27,11 @@ from src.database.migrate_conversations import migrate_conversations
 from src.database.migrate_material_classification import migrate_material_classification
 from src.database.migrate_curriculum_dirty import migrate_curriculum_dirty
 from src.database.migrate_v11 import migrate_v11
-from src.database.migrate_study_curriculum_v1 import migrate_study_curriculum_v1
-from src.database.migrate_study_analysis_v1 import migrate_study_analysis_v1
 from src.curriculum_engine import (
+    backfill_pending_curriculum,
     curriculum_for_subject,
-    curriculum_review_for_subject,
     curriculum_scope,
-    reset_curriculum_for_subject,
-    save_curriculum_review,
+    rebuild_subject_curriculum,
 )
 from src.decision_engine import build_decision_plan
 from src.document_library import (
@@ -63,13 +60,6 @@ from src.mcp_resources import (
 from src.prompt_builder import build_academic_prompt
 from src.runtime_context import build_runtime_context
 from src.study_flows import persist_flashcards, reusable_flashcards
-from src.study_priority import set_curriculum_importance, study_priority_for_subject
-from src.study_analysis import (
-    analyze_topic,
-    create_diagnostic_questions,
-    get_topic_analysis,
-    grade_diagnostic_answers,
-)
 from src.unicore_dashboard import build_dashboard_data
 from src.unicore_agent import UniCoreAgent, extract_json_object
 from src.unicore_client import UniCoreMCPClient
@@ -476,67 +466,6 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(data, 200 if data.get("ok") else 404)
                 return
 
-            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/study-priority"):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 4:
-                    self._send_json({"ok": False, "error": "Ruta de prioridad de estudio inválida"}, 404)
-                    return
-                subject_id = int(path_parts[2])
-                data = study_priority_for_subject(subject_id)
-                self._send_json(data, 200 if data.get("ok") else 404)
-                return
-
-            if parsed.path.startswith("/api/curriculum/items/") and parsed.path.endswith("/analysis"):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 5:
-                    self._send_json({"ok": False, "error": "Ruta de análisis inválida"}, 404)
-                    return
-                item_id = int(path_parts[3])
-                data = get_topic_analysis(item_id)
-                self._send_json(data, 200 if data.get("ok") else 404)
-                return
-
-            if (
-                parsed.path.startswith("/api/subjects/")
-                and parsed.path.endswith("/curriculum/reset")
-            ):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 5:
-                    self._send_json({"ok": False, "error": "Ruta de reset de temario inválida"}, 404)
-                    return
-                subject_id = int(path_parts[2])
-                result = reset_curriculum_for_subject(subject_id)
-                self._send_json(result, 200 if result.get("ok") else 400)
-                return
-
-            if (
-                parsed.path.startswith("/api/subjects/")
-                and parsed.path.endswith("/curriculum/review")
-            ):
-                path_parts = parsed.path.strip("/").split("/")
-
-                if len(path_parts) != 5:
-                    self._send_json(
-                        {
-                            "ok": False,
-                            "error": "Ruta de revisión de temario inválida",
-                        },
-                        404,
-                    )
-                    return
-
-                subject_id = int(path_parts[2])
-
-                data = curriculum_review_for_subject(
-                subject_id
-                )
-
-                self._send_json(
-                    data,
-                    200 if data.get("ok") else 404,
-                )
-                return
-
             if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/curriculum"):
                 path_parts = parsed.path.strip("/").split("/")
                 if len(path_parts) != 4:
@@ -854,17 +783,13 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                     if subject is None or not subject.academic_language_configured:
                         self._send_json({"ok": False, "error": "Configura primero el idioma académico de la asignatura"}, 409)
                         return
-                if payload.get("curriculum_item_id") is None:
-                    self._send_json({
-                        "ok": False,
-                        "error": "Configura el temario y selecciona un Topic o Subtopic antes de crear flashcards.",
-                    }, 409)
-                    return
-                scope = curriculum_scope(subject_id, int(payload["curriculum_item_id"]))
-                if not scope.get("ok"):
-                    self._send_json(scope, 400)
-                    return
-                topic = str(scope["topic"])
+                scope = None
+                if payload.get("curriculum_item_id") is not None:
+                    scope = curriculum_scope(subject_id, int(payload["curriculum_item_id"]))
+                    if not scope.get("ok"):
+                        self._send_json(scope, 400)
+                        return
+                topic = str(scope["topic"]) if scope else self._study_topic(payload, subject_id, "flashcards")
                 document_id = payload.get("document_id")
                 item_count = max(5, min(10, int(payload.get("item_count", 8))))
                 cognitive_level = str(payload.get("cognitive_level", "mixed")).casefold()
@@ -872,7 +797,6 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 existing = reusable_flashcards(
                     subject_id=subject_id,
                     topic=topic,
-                    curriculum_item_id=scope["item_id"],
                     document_id=document_id,
                     maximum_items=item_count,
                 )
@@ -929,7 +853,6 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 drafts = create_flashcard_drafts(
                     subject_id=subject_id,
                     topic=topic,
-                    curriculum_item_id=scope["item_id"],
                     cards=cards,
                     sources=result.get("sources") or [],
                     document_id=document_id,
@@ -1084,71 +1007,14 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "message": "UniCore está reintentando preparar el archivo.", "document": queued_document}, 202)
                 return
 
-            if parsed.path.startswith("/api/curriculum/items/") and parsed.path.endswith("/analysis/diagnostic/grade"):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 7:
-                    self._send_json({"ok": False, "error": "Ruta de evaluación diagnóstica inválida"}, 404)
-                    return
-                item_id = int(path_parts[3])
-                payload = self._read_json()
-                answers = payload.get("answers")
-                if not isinstance(answers, list):
-                    self._send_json({"ok": False, "error": "answers debe ser una lista"}, 400)
-                    return
-                result = grade_diagnostic_answers(item_id, [str(value) for value in answers])
-                self._send_json(result, 200 if result.get("ok") else 400)
-                return
-
-            if parsed.path.startswith("/api/curriculum/items/") and parsed.path.endswith("/analysis/diagnostic"):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 6:
-                    self._send_json({"ok": False, "error": "Ruta de diagnóstico inválida"}, 404)
-                    return
-                item_id = int(path_parts[3])
-                result = create_diagnostic_questions(item_id)
-                self._send_json(result, 200 if result.get("ok") else 400)
-                return
-
-            if parsed.path.startswith("/api/curriculum/items/") and parsed.path.endswith("/analysis"):
+            if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/curriculum/rebuild"):
                 path_parts = parsed.path.strip("/").split("/")
                 if len(path_parts) != 5:
-                    self._send_json({"ok": False, "error": "Ruta de análisis inválida"}, 404)
+                    self._send_json({"ok": False, "error": "Ruta de reconstrucción inválida"}, 404)
                     return
-                item_id = int(path_parts[3])
-                payload = self._read_json()
-                result = analyze_topic(item_id, force=bool(payload.get("force", False)))
-                self._send_json(result, 200 if result.get("ok") else 400)
-                return
-
-            if (
-                parsed.path.startswith("/api/subjects/")
-                and parsed.path.endswith("/curriculum/review")
-            ):
-                path_parts = parsed.path.strip("/").split("/")
-
-                if len(path_parts) != 5:
-                    self._send_json(
-                        {
-                            "ok": False,
-                            "error": "Ruta de revisión de temario inválida",
-                        },
-                        404,
-                    )
-                    return
-
                 subject_id = int(path_parts[2])
-
-                payload = self._read_json()
-
-                result = save_curriculum_review(
-                    subject_id,
-                    payload,
-                )
-
-                self._send_json(
-                    result,
-                    200 if result.get("ok") else 400,
-                )
+                result = rebuild_subject_curriculum(subject_id)
+                self._send_json(result, 200 if result.get("ok") else 400)
                 return
 
             if parsed.path == "/api/conversations":
@@ -1278,22 +1144,6 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
     def do_PUT(self):
         parsed = urlparse(self.path)
         try:
-            if parsed.path.startswith("/api/curriculum/items/") and parsed.path.endswith("/importance"):
-                path_parts = parsed.path.strip("/").split("/")
-                if len(path_parts) != 5:
-                    self._send_json({"ok": False, "error": "Ruta de importancia inválida"}, 404)
-                    return
-                item_id = int(path_parts[3])
-                payload = self._read_json()
-                level_value = payload.get("level")
-                result = set_curriculum_importance(
-                    item_id,
-                    mode=str(payload.get("mode", "auto")),
-                    level=int(level_value) if level_value is not None else None,
-                )
-                self._send_json(result, 200 if result.get("ok") else 400)
-                return
-
             if parsed.path.startswith("/api/subjects/") and parsed.path.endswith("/grade-goal"):
                 path_parts = parsed.path.strip("/").split("/")
                 subject_id = int(path_parts[2])
@@ -1358,11 +1208,10 @@ class UniCoreFrontendAPIHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     migrate_v11()
-    migrate_study_curriculum_v1()
-    migrate_study_analysis_v1()
     migrate_material_classification()
     migrate_curriculum_dirty()
     migrate_conversations()
+    backfill_pending_curriculum()
     server = ThreadingHTTPServer((HOST, PORT), UniCoreFrontendAPIHandler)
     print()
     print("UniCore Frontend API")
